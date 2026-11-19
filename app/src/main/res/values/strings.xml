@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">Muvio</string>
+    <string name="search_hint">Search Movie / Series / Drama</string>
+    <string name="search_action">Search</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_novel_hub">NovelHub</string>
+    <string name="nav_shorts">Shorts</string>
+    <string name="nav_downloads">Downloads</string>
+    <string name="nav_me">Me</string>
+    <string name="badge_hot">HOT</string>
+    <string name="see_all">All</string>
+    <string name="section_live">Live</string>
+    <string name="section_trending_movies">Trending Movies</string>
+    <string name="section_trending_series">Trending TV Series</string>
+    <string name="section_gems">Gems for you</string>
+    <string name="section_categories">Categories</string>
+    <string name="section_hot_short_tv">Hot Short TV</string>
+    <string name="section_most_trending">Most Trending</string>
+    <string name="section_picks_finish">Picks to Finish</string>
+    <string name="section_trending_now">Trending now</string>
+    <string name="action_add_to_list">Add to list</string>
+    <string name="action_added_to_list">In My List</string>
+    <string name="action_share">Share</string>
+    <string name="action_download">Download</string>
+    <string name="action_vip_quality">1080p HD</string>
+    <string name="label_resources">Resources</string>
+    <string name="tab_for_you">For you</string>
+    <string name="tab_comments">Comments</string>
+    <string name="action_post">Post</string>
+</resources>

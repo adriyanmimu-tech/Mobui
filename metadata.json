@@ -1,0 +1,6 @@
+{
+  "name": "Muvio",
+  "description": "Modern dark cinematic streaming app for movies, dramas, anime, and live sports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

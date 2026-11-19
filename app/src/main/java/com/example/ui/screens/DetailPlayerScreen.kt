@@ -184,6 +184,7 @@ fun DetailPlayerScreen(
     liveStreams: List<StreamResource>,
     selectedStreamIndex: Int,
     isLoadingStream: Boolean,
+    streamError: String? = null,
     seasonsCount: Int,
     selectedSeason: Int,
     isInWatchlist: Boolean,
@@ -192,6 +193,7 @@ fun DetailPlayerScreen(
     sleepTimerMinutes: Int = 0,
     onCycleSleepTimer: () -> Unit = {},
     onProgressChange: (Float) -> Unit = {},
+    onRetryStream: () -> Unit = {},
     onBack: () -> Unit,
     onToggleWatchlist: () -> Unit,
     onDownloadClick: () -> Unit,
@@ -218,7 +220,7 @@ fun DetailPlayerScreen(
     var isFullscreen by remember { mutableStateOf(false) }
     var isTheaterDim by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(true) }
-    var progressFraction by remember { mutableFloatStateOf(0.08f) }
+    var progressFraction by remember { mutableFloatStateOf(0f) }
     var showControls by remember { mutableStateOf(true) }
     var selectedBottomTab by remember { mutableIntStateOf(0) } // 0 = For you (default), 1 = Comments
     var showInfoSheet by remember { mutableStateOf(false) }
@@ -346,17 +348,6 @@ fun DetailPlayerScreen(
         }
     }
 
-    // Simulate smooth playback timeline when no external stream URL is attached yet
-    LaunchedEffect(isPlaying, streamUrl) {
-        if (streamUrl.isBlank()) {
-            while (isPlaying) {
-                delay(1000)
-                progressFraction = (progressFraction + 0.005f).let { if (it >= 1f) 0f else it }
-                onProgressChange(progressFraction)
-            }
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -369,6 +360,8 @@ fun DetailPlayerScreen(
                 episodeKey = episodeKey,
                 streamUrl = streamUrl,
                 streamHeaders = activeResource?.headers.orEmpty(),
+                isLoadingStream = isLoadingStream,
+                streamError = streamError,
                 subtitles = activeSubtitles,
                 hasBengaliTrack = hasBengaliTrack,
                 isTranslatingBengali = isTranslatingBengali,
@@ -382,6 +375,7 @@ fun DetailPlayerScreen(
                 isInPipMode = isInPipMode,
                 showControls = showControls && !isInPipMode,
                 simulatedProgressFraction = progressFraction,
+                onRetryStream = onRetryStream,
                 onSelectSpeed = { playbackSpeed = it },
                 onSelectSubtitle = { selectedSubIndex = it },
                 onRequestBengaliSubtitle = requestBengaliSubtitle,
@@ -993,6 +987,8 @@ private fun PlayerStage(
     episodeKey: String,
     streamUrl: String,
     streamHeaders: Map<String, String>,
+    isLoadingStream: Boolean,
+    streamError: String?,
     subtitles: List<SubtitleTrack>,
     hasBengaliTrack: Boolean,
     isTranslatingBengali: Boolean,
@@ -1006,6 +1002,7 @@ private fun PlayerStage(
     isInPipMode: Boolean,
     showControls: Boolean,
     simulatedProgressFraction: Float,
+    onRetryStream: () -> Unit,
     onSelectSpeed: (Float) -> Unit,
     onSelectSubtitle: (Int) -> Unit,
     onRequestBengaliSubtitle: () -> Unit,
@@ -1077,6 +1074,7 @@ private fun PlayerStage(
         if (streamUrl.isBlank()) return@LaunchedEffect
 
         playbackError = null
+        isBuffering = true
         val sameEpisode = lastLoadedEpisodeKey == episodeKey
         val resumeMs = if (sameEpisode && player.currentPosition > 2_000L) player.currentPosition else 0L
         lastLoadedEpisodeKey = episodeKey
@@ -1106,6 +1104,11 @@ private fun PlayerStage(
                 isBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
+                } else if (playbackState == Player.STATE_ENDED &&
+                    (exoPlayer?.duration ?: C.TIME_UNSET) <= 0L &&
+                    playbackError == null
+                ) {
+                    playbackError = "ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন"
                 }
             }
 
@@ -1339,7 +1342,7 @@ private fun PlayerStage(
             )
         }
 
-        if (isBuffering) {
+        if (isBuffering || (isLoadingStream && exoPlayer == null)) {
             CircularProgressIndicator(
                 color = MuvioEmerald,
                 strokeWidth = 2.8.dp,
@@ -1426,7 +1429,8 @@ private fun PlayerStage(
         }
 
         if (!isInPipMode) {
-            playbackError?.let { errMsg ->
+            val activeError = playbackError ?: if (!isLoadingStream && exoPlayer == null) streamError else null
+            activeError?.let { errMsg ->
                 Surface(
                     color = Color.Black.copy(alpha = 0.80f),
                     shape = RoundedCornerShape(12.dp),
@@ -1450,7 +1454,14 @@ private fun PlayerStage(
                         Surface(
                             color = MuvioEmerald,
                             shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.clickable { retryCounter++ }
+                            modifier = Modifier.clickable {
+                                if (exoPlayer != null) {
+                                    playbackError = null
+                                    retryCounter++
+                                } else {
+                                    onRetryStream()
+                                }
+                            }
                         ) {
                             Text(
                                 text = "Retry Stream",
@@ -1775,10 +1786,7 @@ private fun PlayerBottomScrubBar(
         val timeText = if (exoPlayer != null && durationMs > 0L) {
             "${formatMillis(displayPosMs)}/${formatMillis(durationMs)}"
         } else {
-            val currentSeconds = (sliderValue * 902).toInt()
-            val mins = (currentSeconds / 60).toString().padStart(2, '0')
-            val secs = (currentSeconds % 60).toString().padStart(2, '0')
-            "$mins:$secs/15:02"
+            "00:00/--:--"
         }
         Text(
             text = timeText,

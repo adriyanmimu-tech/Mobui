@@ -220,20 +220,43 @@ class SecondaryCatalogApiClient(
                 parseStreamsJson(root, title = title, fallbackLanguage = fallbackLanguage)
             }.getOrDefault(emptyList())
 
-            if (firstStreams.isNotEmpty() || !params.containsKey("path")) {
+            if (firstStreams.isNotEmpty()) {
                 return@runCatching firstStreams
             }
 
-            // Fallback to ?title=...&se=...&ep=... if path lookup returned no streams
-            val fallbackParams = linkedMapOf("title" to title)
-            if (isSeries || season > 1 || episode > 1) {
-                fallbackParams["se"] = season.coerceAtLeast(1).toString()
-                fallbackParams["ep"] = episode.coerceAtLeast(1).toString()
-            } else {
-                fallbackParams["ep"] = "1"
+            // Fallback 1: ?title=<full title>&se=...&ep=... if path lookup returned no streams
+            if (params.containsKey("path")) {
+                val fallbackParams = linkedMapOf("title" to title)
+                if (isSeries || season > 1 || episode > 1) {
+                    fallbackParams["se"] = season.coerceAtLeast(1).toString()
+                    fallbackParams["ep"] = episode.coerceAtLeast(1).toString()
+                } else {
+                    fallbackParams["ep"] = "1"
+                }
+                val titleStreams = runCatching {
+                    val fallbackRoot = executeGetJsonWithRetry(buildUrl("/stream", fallbackParams))
+                    parseStreamsJson(fallbackRoot, title = title, fallbackLanguage = fallbackLanguage)
+                }.getOrDefault(emptyList())
+                if (titleStreams.isNotEmpty()) {
+                    return@runCatching titleStreams
+                }
             }
-            val fallbackRoot = executeGetJsonWithRetry(buildUrl("/stream", fallbackParams))
-            parseStreamsJson(fallbackRoot, title = title, fallbackLanguage = fallbackLanguage)
+
+            // Fallback 2: clean base title (strip year, season/episode markers like "S13 (Ep 1221...)")
+            val cleanBase = cleanTitleForLookup(title)
+            if (cleanBase.isNotBlank() && !cleanBase.equals(title.trim(), ignoreCase = true)) {
+                val cleanParams = linkedMapOf("title" to cleanBase)
+                if (isSeries || season > 1 || episode > 1) {
+                    cleanParams["se"] = season.coerceAtLeast(1).toString()
+                    cleanParams["ep"] = episode.coerceAtLeast(1).toString()
+                } else {
+                    cleanParams["ep"] = "1"
+                }
+                val cleanRoot = executeGetJsonWithRetry(buildUrl("/stream", cleanParams))
+                return@runCatching parseStreamsJson(cleanRoot, title = title, fallbackLanguage = fallbackLanguage)
+            }
+
+            emptyList()
         }
     }
 
@@ -421,7 +444,7 @@ class SecondaryCatalogApiClient(
         val collected = mutableListOf<StreamResource>()
 
         for (container in containers) {
-            val arrayKeys = listOf("sources", "streams", "processedSources", "links", "qualities", "urls")
+            val arrayKeys = listOf("sources", "streams", "processedSources", "downloads", "servers", "links", "qualities", "urls", "files")
             for (key in arrayKeys) {
                 val arr = container.optJSONArray(key) ?: continue
                 collected += parseSourcesArray(
@@ -444,6 +467,9 @@ class SecondaryCatalogApiClient(
                 "m3u8" to "hls",
                 "m3u8Url" to "hls",
                 "masterUrl" to "hls",
+                "playUrl" to "",
+                "videoUrl" to "",
+                "video" to "",
                 "streamUrl" to "",
                 "url" to ""
             )
@@ -778,9 +804,28 @@ class SecondaryCatalogApiClient(
                 )
             ),
             contentSource = ContentSource.SECONDARY,
-            sourceDetailPath = if (rawPath.startsWith("/")) rawPath else ""
+            sourceDetailPath = normalizeDetailPath(rawPath)
         )
     }
+
+    private fun normalizeDetailPath(rawPath: String): String {
+        val trimmed = rawPath.trim()
+        if (trimmed.isBlank()) return ""
+        if (trimmed.startsWith("/")) return trimmed
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            val parsedPath = trimmed.toHttpUrlOrNull()?.encodedPath.orEmpty()
+            return if (parsedPath.startsWith("/") && parsedPath.length > 1) parsedPath else ""
+        }
+        return if (trimmed.contains("/") || trimmed.contains("-")) "/$trimmed" else ""
+    }
+
+    private fun cleanTitleForLookup(raw: String): String =
+        raw.replace(Regex("\\s*\\[[^]]*]"), "")
+            .replace(Regex("\\s*\\([^)]*(?:ep|episode|19\\d{2}|20\\d{2})[^)]*\\)", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("(?i)\\s*\\bS0?\\d{1,2}\\b.*$"), "")
+            .replace(Regex("(?i)\\s*\\bSeason\\s*\\d{1,2}\\b.*$"), "")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
 
     private fun parseSourcesArray(
         arr: JSONArray?,
@@ -796,13 +841,18 @@ class SecondaryCatalogApiClient(
                 when (entry) {
                     is JSONObject -> {
                         val rawUrl = entry.cleanString("url")
+                            .ifBlank { entry.cleanString("directUrl") }
                             .ifBlank { entry.cleanString("streamUrl") }
+                            .ifBlank { entry.cleanString("playUrl") }
+                            .ifBlank { entry.cleanString("videoUrl") }
                             .ifBlank { entry.cleanString("file") }
                             .ifBlank { entry.cleanString("src") }
+                            .ifBlank { entry.cleanString("link") }
                         val resolved = resolveUrl(rawUrl)
                         if (!resolved.startsWith("http")) continue
                         val streamType = entry.cleanString("type").lowercase()
                         val qualityRaw = entry.cleanString("quality")
+                            .ifBlank { entry.cleanString("qualityLabel") }
                             .ifBlank { entry.cleanString("resolution") }
                             .ifBlank { entry.cleanString("label") }
                             .ifBlank { entry.cleanString("name") }

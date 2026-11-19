@@ -5,8 +5,8 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -15,14 +15,12 @@ import androidx.media3.extractor.text.SubtitleParser
 
 /**
  * Production-tuned Media3 ExoPlayer factory for ultra-smooth VOD, Shorts, and Live playback.
- * Uses fast-start adaptive buffering, generous back-buffer for instant seek-back,
- * adaptive HLS bitrate switching, audio focus management, and network wake lock.
+ * Uses RangeContinuableHttpDataSource (OkHttp HTTP/2 pooled + seamless server-capped 206 chunk
+ * continuation), fast-start adaptive buffering, generous back-buffer for instant seek-back,
+ * adaptive HLS bitrate switching, and audio focus management.
  */
 @OptIn(UnstableApi::class)
 object MuvioExoPlayerFactory {
-
-    private const val CHROME_UA =
-        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
     private val mediaAudioAttributes: AudioAttributes = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
@@ -87,7 +85,7 @@ object MuvioExoPlayerFactory {
             .build()
 
         return ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory)))
             .setLoadControl(loadControl)
             .build()
             .apply {
@@ -119,7 +117,7 @@ object MuvioExoPlayerFactory {
         }
 
         return ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory)))
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
             .build()
@@ -133,16 +131,11 @@ object MuvioExoPlayerFactory {
         headers: Map<String, String>,
         connectMs: Int,
         readMs: Int
-    ): DefaultHttpDataSource.Factory {
-        return DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(connectMs)
-            .setReadTimeoutMs(readMs)
-            .setUserAgent(CHROME_UA)
-            .apply {
-                if (headers.isNotEmpty()) {
-                    setDefaultRequestProperties(headers)
-                }
-            }
+    ): DataSource.Factory {
+        return RangeContinuableHttpDataSource.Factory(
+            headers = headers,
+            connectTimeoutMs = connectMs,
+            readTimeoutMs = readMs
+        )
     }
 }

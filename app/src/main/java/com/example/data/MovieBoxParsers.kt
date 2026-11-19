@@ -849,13 +849,16 @@ internal object MovieBoxParsers {
                         .ifBlank { obj.optString("playUrl") }
                     if (url.startsWith("http")) {
                         val quality = obj.optString("quality")
+                            .ifBlank { obj.optString("qualityLabel") }
                             .ifBlank { obj.optString("resolution") }
                             .ifBlank { obj.optString("resolutions") }
                             .ifBlank { obj.optString("label") }
                             .ifBlank { "HD" }
                         val lang = obj.optString("language")
+                            .ifBlank { obj.optString("audio") }
                             .ifBlank { obj.optString("lang") }
                             .ifBlank { obj.optString("dub") }
+                            .ifBlank { payload.optString("activeAudio") }
                             .ifBlank { "Original" }
                         val itemHeaders = rootHeaders + extractHeaders(obj)
                         result += StreamResource(

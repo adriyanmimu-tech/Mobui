@@ -95,6 +95,7 @@ data class MuvioUiState(
     val seasonsCountByMedia: Map<String, Int> = emptyMap(),
     val seasonEpisodesByMedia: Map<String, Map<Int, List<EpisodeItem>>> = emptyMap(),
     val streamsByMedia: Map<String, List<StreamResource>> = emptyMap(),
+    val streamErrorByMedia: Map<String, String> = emptyMap(),
     val selectedStreamIndexByMedia: Map<String, Int> = emptyMap(),
     val detailRecommendationsByMedia: Map<String, List<MediaItem>> = emptyMap(),
     val categoryBrowseTitle: String = "",
@@ -1211,60 +1212,118 @@ class MuvioViewModel(
             val isSeries = media.mediaType != MediaType.MOVIE || media.episodes.isNotEmpty() || seasonMap.isNotEmpty() || season > 1 || episode > 1
             streamJob?.cancel()
             streamJob = viewModelScope.launch {
-                _uiState.update { it.copy(isLoadingStream = true) }
-                secondaryApiClient.fetchStreams(
+                _uiState.update {
+                    it.copy(
+                        isLoadingStream = true,
+                        streamErrorByMedia = it.streamErrorByMedia - media.id
+                    )
+                }
+                val secondaryResult = secondaryApiClient.fetchStreams(
                     detailPath = media.sourceDetailPath,
                     title = media.title,
                     season = season,
                     episode = episode,
                     isSeries = isSeries,
                     fallbackLanguage = media.languageBadge ?: "Original"
-                ).onSuccess { streams ->
+                )
+                val secondaryStreams = secondaryResult.getOrNull().orEmpty()
+                if (secondaryStreams.isNotEmpty()) {
                     _uiState.update { current ->
                         current.copy(
                             isLoadingStream = false,
-                            streamsByMedia = if (streams.isNotEmpty()) {
-                                current.streamsByMedia + (media.id to streams)
-                            } else {
-                                current.streamsByMedia
-                            },
+                            streamsByMedia = current.streamsByMedia + (media.id to secondaryStreams),
+                            streamErrorByMedia = current.streamErrorByMedia - media.id,
                             selectedStreamIndexByMedia = current.selectedStreamIndexByMedia + (media.id to 0)
                         )
                     }
-                }.onFailure {
-                    _uiState.update { it.copy(isLoadingStream = false) }
+                    return@launch
+                }
+
+                // If Source 2 returned 0 streams, try primary MovieBox /stream as a backup so playback still works
+                val fallbackPrimary = if (apiClient.isApiKeyConfigured()) {
+                    apiClient.fetchStreams(
+                        title = media.title,
+                        season = season,
+                        episode = episode,
+                        isSeries = isSeries
+                    ).getOrNull().orEmpty()
+                } else {
+                    emptyList()
+                }
+
+                _uiState.update { current ->
+                    if (fallbackPrimary.isNotEmpty()) {
+                        current.copy(
+                            isLoadingStream = false,
+                            streamsByMedia = current.streamsByMedia + (media.id to fallbackPrimary),
+                            streamErrorByMedia = current.streamErrorByMedia - media.id,
+                            selectedStreamIndexByMedia = current.selectedStreamIndexByMedia + (media.id to 0)
+                        )
+                    } else {
+                        val reason = secondaryResult.exceptionOrNull()?.message
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "এই ভিডিওর স্ট্রীম লিংক পাওয়া যায়নি"
+                        current.copy(
+                            isLoadingStream = false,
+                            streamErrorByMedia = current.streamErrorByMedia + (media.id to reason)
+                        )
+                    }
                 }
             }
             return
         }
 
-        if (!apiClient.isApiKeyConfigured()) return
+        if (!apiClient.isApiKeyConfigured()) {
+            _uiState.update {
+                it.copy(
+                    isLoadingStream = false,
+                    streamErrorByMedia = it.streamErrorByMedia + (media.id to "MOVIEBOX_API_KEY সেট করা নেই")
+                )
+            }
+            return
+        }
         val state = _uiState.value
         val hasSeasons = (state.seasonsCountByMedia[media.id] ?: 1) > 1 ||
             state.seasonEpisodesByMedia[media.id]?.isNotEmpty() == true
         val isSeries = media.mediaType != MediaType.MOVIE || media.episodes.isNotEmpty() || hasSeasons || season > 1 || episode > 1
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingStream = true) }
+            _uiState.update {
+                it.copy(
+                    isLoadingStream = true,
+                    streamErrorByMedia = it.streamErrorByMedia - media.id
+                )
+            }
             apiClient.fetchStreams(
                 title = media.title,
                 season = season,
                 episode = episode,
                 isSeries = isSeries
             ).onSuccess { streams ->
-                _uiState.update { state ->
-                    state.copy(
+                _uiState.update { current ->
+                    if (streams.isNotEmpty()) {
+                        current.copy(
+                            isLoadingStream = false,
+                            streamsByMedia = current.streamsByMedia + (media.id to streams),
+                            streamErrorByMedia = current.streamErrorByMedia - media.id,
+                            selectedStreamIndexByMedia = current.selectedStreamIndexByMedia + (media.id to 0)
+                        )
+                    } else {
+                        current.copy(
+                            isLoadingStream = false,
+                            streamErrorByMedia = current.streamErrorByMedia + (media.id to "এই ভিডিওর স্ট্রীম পাওয়া যায়নি")
+                        )
+                    }
+                }
+            }.onFailure { err ->
+                _uiState.update { current ->
+                    current.copy(
                         isLoadingStream = false,
-                        streamsByMedia = if (streams.isNotEmpty()) {
-                            state.streamsByMedia + (media.id to streams)
-                        } else {
-                            state.streamsByMedia
-                        },
-                        selectedStreamIndexByMedia = state.selectedStreamIndexByMedia + (media.id to 0)
+                        streamErrorByMedia = current.streamErrorByMedia + (
+                            media.id to (err.message?.takeIf { it.isNotBlank() } ?: "স্ট্রীম লোড করতে সমস্যা হয়েছে")
+                        )
                     )
                 }
-            }.onFailure {
-                _uiState.update { it.copy(isLoadingStream = false) }
             }
         }
     }

@@ -138,11 +138,11 @@ class MuvioApiAndViewModelTest {
         )
 
         val streams = client.parseStreamsJson(streamJson, "Squid Game")
-        // Deduplicated: 1080 + 1080p -> single 1080p, 480 + 480p -> single 480p; sorted descending (1080p, 720p, 480p)
+        // Deduplicated: 1080 + 1080p -> single 1080p, 480 + 480p -> single 480p; fast-start priority (720p, 480p, 1080p)
         assertEquals(3, streams.size)
-        assertEquals("1080p", streams[0].quality)
-        assertEquals("720p", streams[1].quality)
-        assertEquals("480p", streams[2].quality)
+        assertEquals("720p", streams[0].quality)
+        assertEquals("480p", streams[1].quality)
+        assertEquals("1080p", streams[2].quality)
         assertEquals(1, streams[0].subtitles.size)
         assertEquals("English", streams[0].subtitles[0].label)
     }

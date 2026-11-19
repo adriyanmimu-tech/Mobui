@@ -3,15 +3,18 @@ package com.example.data
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
+import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -21,11 +24,6 @@ import okhttp3.Response
  * (HLS playlists, segments, subtitles, direct MP4s) AND proxy servers that cap individual
  * HTTP 206 Partial Content responses into fixed virtual chunks (e.g. 512 KB / 3 MB per request
  * with `Content-Range: bytes start-end/total`).
- *
- * Media3's built-in DefaultHttpDataSource treats a single capped 206 chunk's Content-Length as
- * EOF, causing Mp4Extractor to hit STATE_ENDED before parsing large `moov` atoms. This class
- * reports the true remaining file length from `Content-Range` and transparently issues follow-up
- * Range requests over a pooled HTTP/2 OkHttp connection whenever a server-capped chunk ends.
  */
 @OptIn(UnstableApi::class)
 class RangeContinuableHttpDataSource(
@@ -36,8 +34,8 @@ class RangeContinuableHttpDataSource(
 
     class Factory(
         private val headers: Map<String, String> = emptyMap(),
-        private val connectTimeoutMs: Int = 15_000,
-        private val readTimeoutMs: Int = 25_000,
+        private val connectTimeoutMs: Int = 12_000,
+        private val readTimeoutMs: Int = 20_000,
         private val userAgent: String = DEFAULT_USER_AGENT
     ) : DataSource.Factory {
 
@@ -125,13 +123,14 @@ class RangeContinuableHttpDataSource(
             throw HttpDataSource.HttpDataSourceException(
                 IOException("Empty HTTP response body"),
                 dataSpec,
-                androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
                 HttpDataSource.HttpDataSourceException.TYPE_OPEN
             )
         }
 
+        val inputStream = body.byteStream()
         this.activeResponse = response
-        this.activeStream = body.byteStream()
+        this.activeStream = inputStream
 
         val headerContentLength = response.header("Content-Length")?.trim()?.toLongOrNull()
             ?: body.contentLength().takeIf { it >= 0L }
@@ -139,8 +138,34 @@ class RangeContinuableHttpDataSource(
 
         val contentRange = parseContentRange(response.header("Content-Range"))
 
+        // If server ignored our Range header and returned 200 OK while position > 0, skip forward safely
+        if (code == 200 && dataSpec.position > 0L) {
+            try {
+                skipFully(inputStream, dataSpec.position)
+            } catch (e: IOException) {
+                closeActiveChunk()
+                throw HttpDataSource.HttpDataSourceException.createForIOException(
+                    e,
+                    dataSpec,
+                    HttpDataSource.HttpDataSourceException.TYPE_OPEN
+                )
+            }
+        }
+
         if (code == 206 && contentRange != null && contentRange.totalLength > 0L) {
             this.totalContentLength = contentRange.totalLength
+            if (contentRange.start < dataSpec.position) {
+                try {
+                    skipFully(inputStream, dataSpec.position - contentRange.start)
+                } catch (e: IOException) {
+                    closeActiveChunk()
+                    throw HttpDataSource.HttpDataSourceException.createForIOException(
+                        e,
+                        dataSpec,
+                        HttpDataSource.HttpDataSourceException.TYPE_OPEN
+                    )
+                }
+            }
             val remainingInFile = (contentRange.totalLength - dataSpec.position).coerceAtLeast(0L)
             this.bytesRemainingToDeliver = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
                 minOf(dataSpec.length, remainingInFile)
@@ -154,15 +179,20 @@ class RangeContinuableHttpDataSource(
             }
             this.supportsChunkContinuation = chunkEndsBeforeRequested
         } else {
+            val adjustedRemaining = if (code == 200 && headerContentLength >= 0L) {
+                (headerContentLength - dataSpec.position).coerceAtLeast(0L)
+            } else {
+                headerContentLength
+            }
             this.totalContentLength = if (code == 200 && headerContentLength >= 0L) {
                 headerContentLength
             } else {
                 C.LENGTH_UNSET.toLong()
             }
             this.bytesRemainingToDeliver = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
-                if (headerContentLength >= 0L) minOf(dataSpec.length, headerContentLength) else dataSpec.length
+                if (adjustedRemaining >= 0L) minOf(dataSpec.length, adjustedRemaining) else dataSpec.length
             } else {
-                headerContentLength
+                adjustedRemaining
             }
             this.supportsChunkContinuation = false
         }
@@ -197,7 +227,6 @@ class RangeContinuableHttpDataSource(
             val bytesRead = try {
                 stream.read(buffer, offset, maxToRead)
             } catch (e: IOException) {
-                // Retry once from the exact byte offset if a chunked proxy connection dropped mid-read
                 if (supportsChunkContinuation && openNextChunkIfAvailable(spec)) {
                     continue
                 }
@@ -269,15 +298,25 @@ class RangeContinuableHttpDataSource(
                     response.close()
                     throw IOException("Empty body while fetching continuation chunk at byte $currentPosition")
                 }
+                val nextStream = body.byteStream()
                 val nextRange = parseContentRange(response.header("Content-Range"))
                 if (code == 206 && nextRange != null && nextRange.totalLength > 0L) {
+                    if (nextRange.start < currentPosition) {
+                        skipFully(nextStream, currentPosition - nextRange.start)
+                    } else if (nextRange.start > currentPosition) {
+                        response.close()
+                        throw IOException("Range gap: expected $currentPosition, got ${nextRange.start}")
+                    }
                     totalContentLength = nextRange.totalLength
                     supportsChunkContinuation = (nextRange.end + 1L) < nextRange.totalLength
+                } else if (code == 200) {
+                    skipFully(nextStream, currentPosition)
+                    supportsChunkContinuation = false
                 } else {
                     supportsChunkContinuation = false
                 }
                 activeResponse = response
-                activeStream = body.byteStream()
+                activeStream = nextStream
                 return true
             } catch (e: IOException) {
                 lastError = e
@@ -296,11 +335,25 @@ class RangeContinuableHttpDataSource(
         endInclusive: Long,
         forceRangeHeader: Boolean
     ): Response {
-        val requestBuilder = Request.Builder().url(dataSpec.uri.toString())
+        val urlString = dataSpec.uri.toString().trim()
+        val requestBuilder = try {
+            Request.Builder().url(urlString)
+        } catch (e: IllegalArgumentException) {
+            throw HttpDataSource.HttpDataSourceException(
+                IOException("Invalid stream URL: $urlString", e),
+                dataSpec,
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                HttpDataSource.HttpDataSourceException.TYPE_OPEN
+            )
+        }
+
+        if (dataSpec.httpMethod == DataSpec.HTTP_METHOD_HEAD) {
+            requestBuilder.head()
+        }
 
         val mergedHeaders = linkedMapOf<String, String>()
-        defaultHeaders.forEach { (k, v) -> if (k.isNotBlank() && v.isNotBlank()) mergedHeaders[k] = v }
-        dataSpec.httpRequestHeaders.forEach { (k, v) -> if (k.isNotBlank() && v.isNotBlank()) mergedHeaders[k] = v }
+        defaultHeaders.forEach { (k, v) -> if (k.isNotBlank() && v.isNotBlank()) mergedHeaders[k.trim()] = v.trim() }
+        dataSpec.httpRequestHeaders.forEach { (k, v) -> if (k.isNotBlank() && v.isNotBlank()) mergedHeaders[k.trim()] = v.trim() }
 
         val hasCustomUa = mergedHeaders.keys.any { it.equals("User-Agent", ignoreCase = true) }
         if (!hasCustomUa) {
@@ -308,7 +361,8 @@ class RangeContinuableHttpDataSource(
         }
         mergedHeaders.forEach { (k, v) ->
             if (!k.equals("Range", ignoreCase = true)) {
-                requestBuilder.header(k, v)
+                // Guard against malformed non-ASCII headers from upstream APIs
+                runCatching { requestBuilder.header(k, v) }
             }
         }
 
@@ -321,7 +375,6 @@ class RangeContinuableHttpDataSource(
             requestBuilder.header("Range", rangeValue)
         }
 
-        // Disable transparent gzip on media bytes so byte offsets match Content-Range exactly
         if (!mergedHeaders.keys.any { it.equals("Accept-Encoding", ignoreCase = true) }) {
             requestBuilder.header("Accept-Encoding", "identity")
         }
@@ -334,6 +387,17 @@ class RangeContinuableHttpDataSource(
                 dataSpec,
                 HttpDataSource.HttpDataSourceException.TYPE_OPEN
             )
+        }
+    }
+
+    private fun skipFully(stream: InputStream, bytesToSkip: Long) {
+        var remaining = bytesToSkip
+        val skipBuf = ByteArray(8_192)
+        while (remaining > 0L) {
+            val toRead = minOf(remaining, skipBuf.size.toLong()).toInt()
+            val n = stream.read(skipBuf, 0, toRead)
+            if (n == -1) throw EOFException("Stream ended while skipping $bytesToSkip bytes")
+            remaining -= n
         }
     }
 
@@ -380,8 +444,13 @@ class RangeContinuableHttpDataSource(
         private val CONTENT_RANGE_REGEX = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""", RegexOption.IGNORE_CASE)
 
         private val sharedBaseClient: OkHttpClient by lazy {
+            val dispatcher = Dispatcher().apply {
+                maxRequests = 48
+                maxRequestsPerHost = 16
+            }
             OkHttpClient.Builder()
-                .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
+                .dispatcher(dispatcher)
+                .connectionPool(ConnectionPool(12, 5, TimeUnit.MINUTES))
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)

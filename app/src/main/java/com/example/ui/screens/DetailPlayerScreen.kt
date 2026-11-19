@@ -92,6 +92,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -194,6 +195,7 @@ fun DetailPlayerScreen(
     onCycleSleepTimer: () -> Unit = {},
     onProgressChange: (Float) -> Unit = {},
     onRetryStream: () -> Unit = {},
+    onFallbackToAlternateStream: () -> Unit = {},
     onBack: () -> Unit,
     onToggleWatchlist: () -> Unit,
     onDownloadClick: () -> Unit,
@@ -375,6 +377,10 @@ fun DetailPlayerScreen(
                 isInPipMode = isInPipMode,
                 showControls = showControls && !isInPipMode,
                 simulatedProgressFraction = progressFraction,
+                streamCount = availableResources.size,
+                selectedStreamIndex = selectedStreamIndex,
+                onSelectStreamIndex = onSelectStreamIndex,
+                onFallbackToAlternateStream = onFallbackToAlternateStream,
                 onRetryStream = onRetryStream,
                 onSelectSpeed = { playbackSpeed = it },
                 onSelectSubtitle = { selectedSubIndex = it },
@@ -1002,6 +1008,10 @@ private fun PlayerStage(
     isInPipMode: Boolean,
     showControls: Boolean,
     simulatedProgressFraction: Float,
+    streamCount: Int,
+    selectedStreamIndex: Int,
+    onSelectStreamIndex: (Int) -> Unit,
+    onFallbackToAlternateStream: () -> Unit,
     onRetryStream: () -> Unit,
     onSelectSpeed: (Float) -> Unit,
     onSelectSubtitle: (Int) -> Unit,
@@ -1031,6 +1041,12 @@ private fun PlayerStage(
     var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
     var lastLoadedEpisodeKey by remember { mutableStateOf(episodeKey) }
     var playerBoundsRect by remember { mutableStateOf<Rect?>(null) }
+    var alternateFallbackTriedEpisode by remember { mutableStateOf<String?>(null) }
+    val currentStreamCount by rememberUpdatedState(streamCount)
+    val currentSelectedStreamIndex by rememberUpdatedState(selectedStreamIndex)
+    val currentEpisodeKey by rememberUpdatedState(episodeKey)
+    val currentOnSelectStreamIndex by rememberUpdatedState(onSelectStreamIndex)
+    val currentOnFallbackToAlternateStream by rememberUpdatedState(onFallbackToAlternateStream)
 
     // Smooth vertical swipe gesture state for left=Brightness, right=Volume
     var gestureHudState by remember { mutableStateOf<PlayerGestureHudState?>(null) }
@@ -1080,7 +1096,11 @@ private fun PlayerStage(
         lastLoadedEpisodeKey = episodeKey
 
         val builder = ExoMediaItem.Builder().setUri(streamUrl)
-        if (streamUrl.contains(".m3u8", ignoreCase = true) || streamUrl.contains("m3u8", ignoreCase = true)) {
+        val isHlsStream = streamUrl.contains(".m3u8", ignoreCase = true) ||
+            streamUrl.contains("m3u8", ignoreCase = true) ||
+            streamUrl.contains("/api/hls/", ignoreCase = true) ||
+            activeQualityLabel.contains("HLS", ignoreCase = true)
+        if (isHlsStream) {
             builder.setMimeType(MimeTypes.APPLICATION_M3U8)
         }
         if (activeSub != null) {
@@ -1099,6 +1119,23 @@ private fun PlayerStage(
     }
 
     DisposableEffect(exoPlayer) {
+        fun tryNextStreamOrBackup(fallbackErrorMessage: String) {
+            val nextIdx = currentSelectedStreamIndex + 1
+            if (nextIdx < currentStreamCount) {
+                playbackError = null
+                isBuffering = true
+                currentOnSelectStreamIndex(nextIdx)
+            } else if (alternateFallbackTriedEpisode != currentEpisodeKey) {
+                alternateFallbackTriedEpisode = currentEpisodeKey
+                playbackError = null
+                isBuffering = true
+                currentOnFallbackToAlternateStream()
+            } else {
+                isBuffering = false
+                playbackError = fallbackErrorMessage
+            }
+        }
+
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
@@ -1108,13 +1145,19 @@ private fun PlayerStage(
                     (exoPlayer?.duration ?: C.TIME_UNSET) <= 0L &&
                     playbackError == null
                 ) {
-                    playbackError = "ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন"
+                    tryNextStreamOrBackup("ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন")
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                isBuffering = false
-                playbackError = error.localizedMessage ?: "Stream playback error (${error.errorCodeName})"
+                val causeDetail = error.cause?.message?.takeIf { it.isNotBlank() }
+                    ?: error.localizedMessage?.takeIf { it.isNotBlank() }
+                val message = if (causeDetail != null) {
+                    "${error.errorCodeName}: ${causeDetail.take(90)}"
+                } else {
+                    "Stream error (${error.errorCodeName})"
+                }
+                tryNextStreamOrBackup(message)
             }
         }
         exoPlayer?.addListener(listener)
@@ -1145,6 +1188,12 @@ private fun PlayerStage(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(isLoadingStream, streamError) {
+        if (!isLoadingStream && !streamError.isNullOrBlank()) {
+            isBuffering = false
+        }
     }
 
     LaunchedEffect(isPlaying, playbackSpeed, exoPlayer) {
@@ -1429,7 +1478,7 @@ private fun PlayerStage(
         }
 
         if (!isInPipMode) {
-            val activeError = playbackError ?: if (!isLoadingStream && exoPlayer == null) streamError else null
+            val activeError = playbackError ?: if (!isLoadingStream) streamError else null
             activeError?.let { errMsg ->
                 Surface(
                     color = Color.Black.copy(alpha = 0.80f),
@@ -1455,12 +1504,10 @@ private fun PlayerStage(
                             color = MuvioEmerald,
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.clickable {
-                                if (exoPlayer != null) {
-                                    playbackError = null
-                                    retryCounter++
-                                } else {
-                                    onRetryStream()
-                                }
+                                playbackError = null
+                                alternateFallbackTriedEpisode = null
+                                retryCounter++
+                                onRetryStream()
                             }
                         ) {
                             Text(

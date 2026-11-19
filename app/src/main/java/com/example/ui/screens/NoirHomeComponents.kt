@@ -145,8 +145,23 @@ fun NoirFullBleedHeroPager(
             ) {
                 val heroUrl = item.backdropUrl ?: item.poster.remoteUrl
                 if (!heroUrl.isNullOrBlank()) {
+                    val heroContext = androidx.compose.ui.platform.LocalContext.current
+                    val heroRequest = remember(heroUrl, item.backdropRes) {
+                        coil.request.ImageRequest.Builder(heroContext)
+                            .data(heroUrl)
+                            .size(900, 1200)
+                            .precision(coil.size.Precision.INEXACT)
+                            .memoryCacheKey(heroUrl)
+                            .diskCacheKey(heroUrl)
+                            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .allowRgb565(true)
+                            .crossfade(120)
+                            .error(item.backdropRes)
+                            .build()
+                    }
                     AsyncImage(
-                        model = heroUrl,
+                        model = heroRequest,
                         contentDescription = item.title,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

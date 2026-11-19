@@ -153,12 +153,14 @@ fun MuvioPosterArtwork(
             val request = remember(remoteUrl, poster.fallbackRes) {
                 ImageRequest.Builder(context)
                     .data(remoteUrl)
+                    .size(340, 490)
+                    .precision(coil.size.Precision.INEXACT)
                     .memoryCacheKey(remoteUrl)
                     .diskCacheKey(remoteUrl)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .allowRgb565(true)
-                    .crossfade(150)
+                    .crossfade(100)
                     .error(poster.fallbackRes)
                     .build()
             }

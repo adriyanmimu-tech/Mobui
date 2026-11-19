@@ -29,6 +29,7 @@ import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import androidx.compose.material3.AlertDialog
@@ -128,34 +129,55 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configureFastImageLoader() {
+        if (imageLoaderConfigured) return
+        imageLoaderConfigured = true
         runCatching {
             val appContext = applicationContext
             Coil.setImageLoader {
+                val dispatcher = Dispatcher().apply {
+                    maxRequests = 64
+                    maxRequestsPerHost = 24
+                }
                 val sharedHttpClient = OkHttpClient.Builder()
-                    .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
-                    .connectTimeout(15, TimeUnit.SECONDS)
-                    .readTimeout(20, TimeUnit.SECONDS)
+                    .dispatcher(dispatcher)
+                    .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+                    .connectTimeout(12, TimeUnit.SECONDS)
+                    .readTimeout(18, TimeUnit.SECONDS)
+                    .addInterceptor { chain ->
+                        val req = chain.request().newBuilder()
+                            .header(
+                                "User-Agent",
+                                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                            )
+                            .build()
+                        chain.proceed(req)
+                    }
                     .build()
                 ImageLoader.Builder(appContext)
                     .okHttpClient(sharedHttpClient)
                     .memoryCache {
                         MemoryCache.Builder(appContext)
-                            .maxSizePercent(0.25)
+                            .maxSizePercent(0.28)
                             .build()
                     }
                     .diskCache {
                         DiskCache.Builder()
                             .directory(appContext.cacheDir.resolve("muvio_img_cache"))
-                            .maxSizeBytes(80L * 1024L * 1024L)
+                            .maxSizeBytes(100L * 1024L * 1024L)
                             .build()
                     }
                     .allowHardware(true)
                     .allowRgb565(true)
                     .respectCacheHeaders(false)
-                    .crossfade(150)
+                    .crossfade(100)
                     .build()
             }
         }
+    }
+
+    companion object {
+        @Volatile
+        private var imageLoaderConfigured = false
     }
 }
 
@@ -377,6 +399,7 @@ fun MuvioApp(
                         onCycleSleepTimer = viewModel::cycleSleepTimer,
                         onProgressChange = { frac -> viewModel.updateWatchProgress(media.id, frac) },
                         onRetryStream = { viewModel.fetchStreamsForMedia(mediaForDisplay, selectedSeason, selectedEp) },
+                        onFallbackToAlternateStream = { viewModel.fallbackToAlternateStream(mediaForDisplay, selectedSeason, selectedEp) },
                         onBack = { navController.popBackStack() },
                         onToggleWatchlist = { viewModel.toggleWatchlist(media.id) },
                         onDownloadClick = { viewModel.startDownload(media) },

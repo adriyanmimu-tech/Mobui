@@ -476,7 +476,8 @@ class SecondaryCatalogApiClient(
             directFields.forEachIndexed { idx, (fieldKey, typeHint) ->
                 val raw = container.cleanString(fieldKey)
                 val resolved = resolveUrl(raw)
-                if (resolved.startsWith("http")) {
+                val isExplicitVideoField = typeHint.isNotBlank() || fieldKey.equals("streamUrl", true) || fieldKey.equals("videoUrl", true)
+                if (resolved.startsWith("http") && isLikelyPlayableStreamUrl(resolved, strict = !isExplicitVideoField)) {
                     val quality = normalizeQuality("", typeHint, resolved, idx)
                     collected += StreamResource(
                         id = "s2_stream_${fieldKey}_$idx",
@@ -849,8 +850,9 @@ class SecondaryCatalogApiClient(
                             .ifBlank { entry.cleanString("src") }
                             .ifBlank { entry.cleanString("link") }
                         val resolved = resolveUrl(rawUrl)
-                        if (!resolved.startsWith("http")) continue
+                        if (!resolved.startsWith("http") || !isLikelyPlayableStreamUrl(resolved, strict = false)) continue
                         val streamType = entry.cleanString("type").lowercase()
+                        if (streamType == "embed" || streamType == "iframe" || streamType == "webpage") continue
                         val qualityRaw = entry.cleanString("quality")
                             .ifBlank { entry.cleanString("qualityLabel") }
                             .ifBlank { entry.cleanString("resolution") }
@@ -858,6 +860,7 @@ class SecondaryCatalogApiClient(
                             .ifBlank { entry.cleanString("name") }
                         val quality = normalizeQuality(qualityRaw, streamType, resolved, i)
                         val language = entry.cleanString("language")
+                            .ifBlank { entry.cleanString("audio") }
                             .ifBlank { entry.cleanString("lang") }
                             .ifBlank { fallbackLanguage }
                         val headers = buildStreamHeaders(resolved, extractHeaders(entry))
@@ -875,7 +878,7 @@ class SecondaryCatalogApiClient(
                     }
                     is String -> {
                         val resolved = resolveUrl(entry.trim())
-                        if (resolved.startsWith("http")) {
+                        if (resolved.startsWith("http") && isLikelyPlayableStreamUrl(resolved, strict = true)) {
                             val quality = normalizeQuality("", "", resolved, i)
                             out += StreamResource(
                                 id = "s2_src_$i",
@@ -895,7 +898,7 @@ class SecondaryCatalogApiClient(
         }
         if (out.isEmpty() && fallbackDirectUrl.isNotBlank()) {
             val resolved = resolveUrl(fallbackDirectUrl)
-            if (resolved.startsWith("http")) {
+            if (resolved.startsWith("http") && isLikelyPlayableStreamUrl(resolved, strict = true)) {
                 val quality = normalizeQuality("", "", resolved, 0)
                 out += StreamResource(
                     id = "s2_src_direct",
@@ -912,6 +915,39 @@ class SecondaryCatalogApiClient(
         return out
             .distinctBy { it.streamUrl }
             .sortedByDescending { qualityRank(it.quality) }
+    }
+
+    private fun isLikelyPlayableStreamUrl(url: String, strict: Boolean): Boolean {
+        val lower = url.lowercase()
+        val pathOnly = lower.substringBefore('?').substringBefore('#')
+        // Reject obvious web pages, embeds, and image assets
+        if (pathOnly.endsWith(".html") || pathOnly.endsWith(".htm") ||
+            pathOnly.endsWith(".jpg") || pathOnly.endsWith(".jpeg") ||
+            pathOnly.endsWith(".png") || pathOnly.endsWith(".webp") ||
+            pathOnly.endsWith(".gif") || pathOnly.endsWith(".svg") ||
+            lower.contains("/trial-embed") || lower.contains("/embed/") ||
+            lower.contains("embedplayer")
+        ) {
+            return false
+        }
+        val hasMediaSignal = pathOnly.endsWith(".mp4") || pathOnly.endsWith(".m3u8") ||
+            pathOnly.endsWith(".mkv") || pathOnly.endsWith(".webm") ||
+            pathOnly.endsWith(".ts") || pathOnly.endsWith(".mpd") ||
+            lower.contains(".m3u8") || lower.contains(".mp4") ||
+            lower.contains("/api/hls/") || lower.contains("/api/stream") ||
+            lower.contains("/api/mb-stream") || lower.contains("/api/proxy") ||
+            lower.contains("/api/video") || lower.contains("stream") ||
+            lower.contains("video") || lower.contains("hls") || lower.contains("cdn")
+        if (strict) {
+            // For ambiguous generic fields ("url", "playUrl"), require a real media signal
+            if (pathOnly.contains("/movie/") || pathOnly.contains("/series/") ||
+                pathOnly.contains("/tv/") || pathOnly.contains("/anime/")
+            ) {
+                return hasMediaSignal && (lower.contains(".mp4") || lower.contains(".m3u8") || lower.contains("/api/"))
+            }
+            return hasMediaSignal
+        }
+        return true
     }
 
     private fun buildStreamHeaders(resolvedUrl: String, existing: Map<String, String>): Map<String, String> {

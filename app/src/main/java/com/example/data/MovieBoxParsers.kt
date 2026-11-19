@@ -920,16 +920,17 @@ internal object MovieBoxParsers {
     }
 
     private fun qualitySortRank(quality: String): Int {
+        // Prioritize fast-start 720p/HD then 480p on mobile networks; 1080p & 4K remain 1-tap selectable in Quality menu
         return when (quality.lowercase()) {
-            "4k", "2160p" -> 2160
-            "1440p" -> 1440
-            "1080p", "full hd", "fhd" -> 1080
-            "720p", "hd" -> 720
-            "540p" -> 540
-            "480p", "sd" -> 480
-            "360p" -> 360
-            "240p" -> 240
-            else -> Regex("\\d+").find(quality)?.value?.toIntOrNull() ?: 600
+            "720p", "hd" -> 1000
+            "540p" -> 920
+            "480p", "sd" -> 900
+            "1080p", "full hd", "fhd" -> 850
+            "1440p" -> 800
+            "4k", "2160p" -> 780
+            "360p" -> 600
+            "240p" -> 400
+            else -> 700
         }
     }
 

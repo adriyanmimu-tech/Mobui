@@ -232,8 +232,9 @@ class MuvioViewModel(
                 }
         }
 
-        // 2. Live Movies, TV Series & Anime shelves so Trending & Auto-Hero mix all three 50/50
+        // 2. Defer non-critical catalog/enrichment calls so Home feeds & posters get full bandwidth first
         viewModelScope.launch {
+            delay(1_100L)
             apiClient.fetchCatalog("/type/movies", page = 1).onSuccess { movies ->
                 if (movies.isNotEmpty()) {
                     _uiState.update { state ->
@@ -247,6 +248,7 @@ class MuvioViewModel(
             }
         }
         viewModelScope.launch {
+            delay(1_150L)
             apiClient.fetchCatalog("/type/tv", page = 1).onSuccess { series ->
                 if (series.isNotEmpty()) {
                     _uiState.update { state ->
@@ -260,6 +262,7 @@ class MuvioViewModel(
             }
         }
         viewModelScope.launch {
+            delay(1_200L)
             apiClient.fetchCatalog("/anime", page = 1).onSuccess { animeList ->
                 if (animeList.isNotEmpty()) {
                     val taggedAnime = animeList.map { item ->
@@ -281,6 +284,7 @@ class MuvioViewModel(
 
         // 3. Hot Short TV - GET /shorts?page=1
         viewModelScope.launch {
+            delay(1_300L)
             apiClient.fetchShorts(page = 1).onSuccess { reels ->
                 if (reels.isNotEmpty()) {
                     _uiState.update { it.copy(shortReels = reels) }
@@ -290,6 +294,7 @@ class MuvioViewModel(
 
         // 4. Trending Hot Searches - GET /hot-search
         viewModelScope.launch {
+            delay(1_350L)
             apiClient.fetchHotSearch().onSuccess { hot ->
                 if (hot.isNotEmpty()) {
                     _uiState.update { it.copy(hotSearches = hot.take(12)) }
@@ -299,6 +304,7 @@ class MuvioViewModel(
 
         // 5. Coming Soon / Upcoming - GET /upcoming?page=1
         viewModelScope.launch {
+            delay(1_400L)
             apiClient.fetchUpcoming(page = 1).onSuccess { upcoming ->
                 if (upcoming.isNotEmpty()) {
                     _uiState.update { state ->
@@ -313,6 +319,7 @@ class MuvioViewModel(
 
         // 6. All Categories (sports excluded, 18+ included) - GET /categories
         viewModelScope.launch {
+            delay(1_450L)
             apiClient.fetchCategories().onSuccess { categories ->
                 if (categories.isNotEmpty()) {
                     _uiState.update { it.copy(apiCategories = categories) }
@@ -322,6 +329,7 @@ class MuvioViewModel(
 
         // 7. Filter Options - GET /filter-options
         viewModelScope.launch {
+            delay(1_500L)
             apiClient.fetchFilterOptions().onSuccess { options ->
                 _uiState.update { it.copy(filterOptions = options) }
             }
@@ -329,6 +337,7 @@ class MuvioViewModel(
 
         // 8. API Key Quota & Expiry - GET /me
         viewModelScope.launch {
+            delay(1_550L)
             apiClient.fetchAccountQuota().onSuccess { quota ->
                 _uiState.update { it.copy(quotaInfo = quota) }
             }
@@ -406,9 +415,10 @@ class MuvioViewModel(
                     }
                 }
         }
-        // Enrich 50/50 shelves across Anime, Drama, Bengali, Bollywood & South Indian
-        listOf("/anime", "/drama", "/language/bangla", "/bollywood").forEach { catPath ->
+        // Enrich 50/50 shelves after initial Home posters begin loading
+        listOf("/anime", "/drama", "/language/bangla", "/bollywood").forEachIndexed { idx, catPath ->
             viewModelScope.launch {
+                delay(1_150L + idx * 120L)
                 secondaryApiClient.fetchCatalog(path = catPath, page = 1).onSuccess { catItems ->
                     if (catItems.isNotEmpty()) {
                         _uiState.update { state ->
@@ -425,6 +435,7 @@ class MuvioViewModel(
         }
         // Blend Source 2 /hot-search into Trending Searches
         viewModelScope.launch {
+            delay(1_400L)
             secondaryApiClient.fetchHotSearch().onSuccess { hot ->
                 if (hot.isNotEmpty()) {
                     _uiState.update { state ->
@@ -441,6 +452,7 @@ class MuvioViewModel(
         }
         // Blend Source 2 /upcoming 50/50 into Coming Soon
         viewModelScope.launch {
+            delay(1_500L)
             secondaryApiClient.fetchUpcoming(page = 1).onSuccess { upcoming ->
                 if (upcoming.isNotEmpty()) {
                     _uiState.update { state ->
@@ -1187,7 +1199,11 @@ class MuvioViewModel(
                             id = "${media.id}_s${season}_e${episode}",
                             label = "${media.title} [HD]",
                             language = media.languageBadge ?: "Original",
-                            quality = if (url.contains(".m3u8", true)) "Adaptive HLS" else "Direct MP4",
+                            quality = if (
+                                url.contains(".m3u8", true) ||
+                                url.contains("m3u8", true) ||
+                                url.contains("/api/hls/", true)
+                            ) "Adaptive HLS" else "Direct MP4",
                             uploader = "CinePulse HD",
                             streamUrl = url
                         )
@@ -1321,6 +1337,86 @@ class MuvioViewModel(
                         isLoadingStream = false,
                         streamErrorByMedia = current.streamErrorByMedia + (
                             media.id to (err.message?.takeIf { it.isNotBlank() } ?: "স্ট্রীম লোড করতে সমস্যা হয়েছে")
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Cross-source automatic playback failover:
+     * If every stream from the active source fails inside ExoPlayer (e.g., broken CDN link or
+     * upstream proxy outage), automatically fetch playable streams for the same title from the
+     * alternate configured source (Source 2 -> Source 1 or Source 1 -> Source 2).
+     */
+    fun fallbackToAlternateStream(media: MediaItem, season: Int = 1, episode: Int = 1) {
+        val state = _uiState.value
+        val hasSeasons = (state.seasonsCountByMedia[media.id] ?: 1) > 1 ||
+            state.seasonEpisodesByMedia[media.id]?.isNotEmpty() == true
+        val isSeries = media.mediaType != MediaType.MOVIE || media.episodes.isNotEmpty() || hasSeasons || season > 1 || episode > 1
+        val tryPrimaryBackup = media.contentSource == ContentSource.SECONDARY
+
+        if ((tryPrimaryBackup && !apiClient.isApiKeyConfigured()) ||
+            (!tryPrimaryBackup && !secondaryApiClient.isConfigured())
+        ) {
+            _uiState.update { current ->
+                current.copy(
+                    isLoadingStream = false,
+                    streamErrorByMedia = current.streamErrorByMedia + (
+                        media.id to "ভিডিও স্ট্রীম চালু করা যায়নি, আবার চেষ্টা করুন"
+                    )
+                )
+            }
+            return
+        }
+
+        streamJob?.cancel()
+        streamJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isLoadingStream = true,
+                    streamErrorByMedia = it.streamErrorByMedia - media.id
+                )
+            }
+            val backupStreams = if (tryPrimaryBackup) {
+                apiClient.fetchStreams(
+                    title = media.title,
+                    season = season,
+                    episode = episode,
+                    isSeries = isSeries
+                ).getOrNull().orEmpty()
+            } else {
+                secondaryApiClient.fetchStreams(
+                    detailPath = "",
+                    title = media.title,
+                    season = season,
+                    episode = episode,
+                    isSeries = isSeries,
+                    fallbackLanguage = media.languageBadge ?: "Original"
+                ).getOrNull().orEmpty()
+            }
+
+            _uiState.update { current ->
+                if (backupStreams.isNotEmpty()) {
+                    val existingUrls = current.streamsByMedia[media.id].orEmpty().map { it.streamUrl }.toSet()
+                    val freshBackup = backupStreams.filterNot { it.streamUrl in existingUrls }.ifEmpty { backupStreams }
+                    current.copy(
+                        isLoadingStream = false,
+                        streamsByMedia = current.streamsByMedia + (media.id to freshBackup),
+                        streamErrorByMedia = current.streamErrorByMedia - media.id,
+                        selectedStreamIndexByMedia = current.selectedStreamIndexByMedia + (media.id to 0),
+                        snackMessage = if (tryPrimaryBackup) {
+                            "ব্যাকআপ সার্ভার (Source 1) থেকে চালু হচ্ছে..."
+                        } else {
+                            "ব্যাকআপ সার্ভার (Source 2) থেকে চালু হচ্ছে..."
+                        }
+                    )
+                } else {
+                    current.copy(
+                        isLoadingStream = false,
+                        streamErrorByMedia = current.streamErrorByMedia + (
+                            media.id to "ভিডিও স্ট্রীম পাওয়া যায়নি, আবার চেষ্টা করুন"
                         )
                     )
                 }

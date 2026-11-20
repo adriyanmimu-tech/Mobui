@@ -322,18 +322,12 @@ fun DetailPlayerScreen(
         }
     }
 
-    // Automatically select native Bengali subtitle if MovieBox/Source 2 already provides one,
-    // while strictly respecting if the user explicitly selected "Off".
+    // Keep subtitles OFF by default on initial video start so ExoPlayer NEVER double-prepares
+    // or blocks video playback waiting on slow/broken remote subtitle CDNs. Users can turn on
+    // any subtitle (including 1-tap Bengali) anytime via the CC button.
     LaunchedEffect(episodeKey, activeSubtitles.size) {
-        if (activeSubtitles.isEmpty()) {
+        if (activeSubtitles.isEmpty() || selectedSubIndex >= activeSubtitles.size) {
             selectedSubIndex = -1
-        } else if (!userDisabledSub) {
-            val bnIdx = activeSubtitles.indexOfFirst { BengaliSubtitleService.isBengaliTrack(it) }
-            if (bnIdx >= 0 && (selectedSubIndex == -1 || selectedSubIndex >= activeSubtitles.size)) {
-                selectedSubIndex = bnIdx
-            } else if (selectedSubIndex == -1 || selectedSubIndex >= activeSubtitles.size) {
-                selectedSubIndex = 0
-            }
         }
     }
 
@@ -1368,6 +1362,27 @@ private fun PlayerStage(
     LaunchedEffect(isLoadingStream, streamError) {
         if (!isLoadingStream && !streamError.isNullOrBlank()) {
             isBuffering = false
+        }
+    }
+
+    // YouTube-style Anti-Stall Auto-Switch: if a stream stays stuck buffering for > 9s continuously
+    // while another faster/lighter quality stream exists for this same video, switch automatically
+    // at the current timestamp instead of spinning forever.
+    LaunchedEffect(isBuffering, isPlaying, episodeKey, selectedStreamIndex, streamCount, streamUrl) {
+        if (!isBuffering || !isPlaying || streamUrl.isBlank() || streamCount <= 1) return@LaunchedEffect
+        val player = exoPlayer ?: return@LaunchedEffect
+        val startPos = player.currentPosition
+        delay(9_000L)
+        val stillStuck = isBuffering && isPlaying && (player.currentPosition <= startPos + 500L)
+        if (stillStuck) {
+            triedStreamIndices.add(currentSelectedStreamIndex)
+            val nextIdx = (0 until currentStreamCount).firstOrNull { it !in triedStreamIndices }
+            if (nextIdx != null) {
+                if (player.currentPosition > 2_000L) {
+                    lastKnownPositionMs = player.currentPosition
+                }
+                currentOnSelectStreamIndex(nextIdx)
+            }
         }
     }
 

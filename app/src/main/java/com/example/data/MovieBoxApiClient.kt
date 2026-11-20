@@ -85,6 +85,30 @@ class MovieBoxApiClient(
             .build()
     }
 
+    private data class CachedEntry<T>(val value: T, val savedAtMs: Long)
+
+    private val detailCache = java.util.concurrent.ConcurrentHashMap<String, CachedEntry<MediaDetailResult>>()
+    private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CachedEntry<List<StreamResource>>>()
+    private val cacheTtlMs = 8 * 60_000L
+
+    private fun <T> readCache(map: java.util.concurrent.ConcurrentHashMap<String, CachedEntry<T>>, key: String): T? {
+        val entry = map[key] ?: return null
+        return if (System.currentTimeMillis() - entry.savedAtMs <= cacheTtlMs) {
+            entry.value
+        } else {
+            map.remove(key)
+            null
+        }
+    }
+
+    private fun <T> writeCache(map: java.util.concurrent.ConcurrentHashMap<String, CachedEntry<T>>, key: String, value: T) {
+        if (map.size >= 40) {
+            val oldestKey = map.entries.minByOrNull { it.value.savedAtMs }?.key
+            if (oldestKey != null) map.remove(oldestKey)
+        }
+        map[key] = CachedEntry(value, System.currentTimeMillis())
+    }
+
     // 1. GET /home
     suspend fun fetchHomeFeed(): Result<HomeFeedResult> = withContext(Dispatchers.IO) {
         executeGetJson("$baseUrl/home").mapCatching { root -> parseHomeJson(root) }
@@ -172,6 +196,11 @@ class MovieBoxApiClient(
     suspend fun fetchDetails(title: String, mediaId: String? = null): Result<MediaDetailResult> = withContext(Dispatchers.IO) {
         val cleanTitle = cleanQueryTitle(title)
         val baseTitle = extractBaseTitle(title)
+        val cacheKey = "${mediaId.orEmpty().ifBlank { cleanTitle.lowercase() }}"
+        readCache(detailCache, cacheKey)?.let { cached ->
+            return@withContext Result.success(cached)
+        }
+
         val encodedClean = URLEncoder.encode(cleanTitle, "UTF-8")
         val idParam = if (!mediaId.isNullOrBlank() && !mediaId.startsWith("seed_")) {
             "&subjectId=${URLEncoder.encode(mediaId, "UTF-8")}"
@@ -194,9 +223,13 @@ class MovieBoxApiClient(
             val retryDetail = retryResult.getOrNull()
             if (retryDetail != null) {
                 if (firstDetail == null || retryDetail.seasonEpisodes.size >= firstDetail.seasonEpisodes.size) {
+                    writeCache(detailCache, cacheKey, retryDetail)
                     return@withContext Result.success(retryDetail)
                 }
             }
+        }
+        if (firstDetail != null) {
+            writeCache(detailCache, cacheKey, firstDetail)
         }
         firstResult
     }
@@ -237,16 +270,27 @@ class MovieBoxApiClient(
         val baseTitle = extractBaseTitle(title)
         val se = if (isSeries) season.coerceAtLeast(1) else 1
         val ep = if (isSeries) episode.coerceAtLeast(1) else 1
+        val cacheKey = "${cleanTitle.lowercase()}|s$se|e$ep|$isSeries"
+        readCache(streamCache, cacheKey)?.takeIf { it.isNotEmpty() }?.let { cached ->
+            return@withContext Result.success(cached)
+        }
+
         val encodedClean = URLEncoder.encode(cleanTitle, "UTF-8")
         val primaryUrl = "$baseUrl/stream?title=$encodedClean&se=$se&ep=$ep"
         val primaryResult = executeGetJson(primaryUrl).mapCatching { root -> parseStreamsJson(root, cleanTitle) }
         val primaryList = primaryResult.getOrNull().orEmpty()
-        if (primaryList.isNotEmpty() || baseTitle.equals(cleanTitle, ignoreCase = true) || baseTitle.isBlank()) {
+        if (primaryList.isNotEmpty()) {
+            writeCache(streamCache, cacheKey, primaryList)
+            return@withContext primaryResult
+        }
+        if (baseTitle.equals(cleanTitle, ignoreCase = true) || baseTitle.isBlank()) {
             return@withContext primaryResult
         }
         val encodedBase = URLEncoder.encode(baseTitle, "UTF-8")
         val fallbackUrl = "$baseUrl/stream?title=$encodedBase&se=$se&ep=$ep"
-        executeGetJson(fallbackUrl).mapCatching { root -> parseStreamsJson(root, baseTitle) }
+        val fallbackResult = executeGetJson(fallbackUrl).mapCatching { root -> parseStreamsJson(root, baseTitle) }
+        fallbackResult.getOrNull()?.takeIf { it.isNotEmpty() }?.let { writeCache(streamCache, cacheKey, it) }
+        fallbackResult
     }
 
     // 17. GET /me

@@ -118,6 +118,9 @@ class RangeContinuableHttpDataSource(
 
         transferInitializing(dataSpec)
 
+        val lowerUrl = dataSpec.uri.toString().lowercase()
+        val isPlaylistOrSub = lowerUrl.contains(".m3u8") || lowerUrl.contains(".vtt") ||
+            lowerUrl.contains(".srt") || lowerUrl.contains(".ass") || lowerUrl.contains("/api/hls/")
         val response = executeChunkRequestWithRetry(
             dataSpec = dataSpec,
             startOffset = dataSpec.position,
@@ -126,7 +129,7 @@ class RangeContinuableHttpDataSource(
             } else {
                 C.LENGTH_UNSET.toLong()
             },
-            forceRangeHeader = dataSpec.position > 0L || dataSpec.length != C.LENGTH_UNSET.toLong()
+            forceRangeHeader = !isPlaylistOrSub || dataSpec.position > 0L || dataSpec.length != C.LENGTH_UNSET.toLong()
         )
 
         val code = response.code
@@ -546,8 +549,11 @@ class RangeContinuableHttpDataSource(
     }
 
     private fun skipFully(stream: InputStream, bytesToSkip: Long) {
+        if (bytesToSkip > 2L * 1024L * 1024L) {
+            throw IOException("Server ignored Range request (refusing to skip ${bytesToSkip / (1024 * 1024)} MB)")
+        }
         var remaining = bytesToSkip
-        val skipBuf = ByteArray(8_192)
+        val skipBuf = ByteArray(16_384)
         while (remaining > 0L) {
             val toRead = minOf(remaining, skipBuf.size.toLong()).toInt()
             val n = stream.read(skipBuf, 0, toRead)

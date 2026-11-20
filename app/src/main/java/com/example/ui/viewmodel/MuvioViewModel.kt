@@ -131,7 +131,7 @@ data class MuvioUiState(
     val secondarySourceError: String? = null,
     val autoPlayNext: Boolean = true,
     val wifiOnlyDownloads: Boolean = false,
-    val preferredQuality: String = "1080p HD",
+    val preferredQuality: String = "720p HD",
     val subtitleSize: String = "Medium",
     val remoteConfig: RemoteAppConfig = RemoteAppConfig(),
     val isRemoteConfigSynced: Boolean = false,

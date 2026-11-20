@@ -105,23 +105,23 @@ object MuvioExoPlayerFactory {
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         val mediaSourceFactory = createSmartMediaSourceFactory(dataSourceFactory, subtitleParserFactory)
 
-        // Fast 1s initial start + deep 35s..90s forward buffer + 5s rebuffer cushion
-        // prevents repeated buffering loops on variable-speed proxy servers (Source 2).
+        // Instant 0.6s startup + 2s quick rebuffer recovery + balanced 20s..50s forward buffer
+        // so videos begin playing immediately without over-choking mobile data or Render proxies.
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 35_000,
-                /* maxBufferMs = */ 90_000,
-                /* bufferForPlaybackMs = */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs = */ 5_000
+                /* minBufferMs = */ 20_000,
+                /* maxBufferMs = */ 50_000,
+                /* bufferForPlaybackMs = */ 600,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_000
             )
-            .setBackBuffer(/* backBufferDurationMs = */ 25_000, /* retainBackBufferFromKeyframe = */ true)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(/* backBufferDurationMs = */ 15_000, /* retainBackBufferFromKeyframe = */ true)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
-        // Start adaptive HLS estimation at 1.5 Mbps so playback begins immediately instead of
-        // stalling on a heavy initial 1080p segment, then scales up smoothly if bandwidth allows.
+        // Start adaptive HLS estimation at 800 Kbps so the very first segment downloads in <1s
+        // for instant playback, then smoothly scales up to 720p/1080p as throughput is measured.
         val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
-            .setInitialBitrateEstimate(1_500_000L)
+            .setInitialBitrateEstimate(800_000L)
             .build()
 
         val trackSelector = DefaultTrackSelector(context).apply {

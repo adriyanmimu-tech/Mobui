@@ -35,7 +35,7 @@ data class LocalHistoryRecord(
 data class MuvioSettingsSnapshot(
     val autoPlayNext: Boolean = true,
     val wifiOnlyDownloads: Boolean = false,
-    val preferredQuality: String = "1080p HD",
+    val preferredQuality: String = "720p HD",
     val subtitleSize: String = "Medium",
     val isAdultVerified: Boolean = false,
     val recentSearches: List<String> = emptyList(),
@@ -70,7 +70,7 @@ class MuvioPreferencesStore(private val context: Context) {
             MuvioSettingsSnapshot(
                 autoPlayNext = prefs[Keys.AUTO_PLAY_NEXT] ?: true,
                 wifiOnlyDownloads = prefs[Keys.WIFI_ONLY_DOWNLOADS] ?: false,
-                preferredQuality = prefs[Keys.PREFERRED_QUALITY] ?: "1080p HD",
+                preferredQuality = prefs[Keys.PREFERRED_QUALITY] ?: "720p HD",
                 subtitleSize = prefs[Keys.SUBTITLE_SIZE] ?: "Medium",
                 isAdultVerified = prefs[Keys.ADULT_VERIFIED] ?: false,
                 recentSearches = decodeStringList(prefs[Keys.RECENT_SEARCHES_JSON]),

@@ -9,11 +9,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 private val MuvioDarkColorScheme = darkColorScheme(
-    primary = MuvioChampagne,
-    onPrimary = Color(0xFF140F05),
-    primaryContainer = MuvioEmeraldContainer,
-    onPrimaryContainer = MuvioChampagneLight,
-    secondary = MuvioBronze,
+    primary = MuvioCrimson,
+    onPrimary = Color.White,
+    primaryContainer = MuvioCrimsonContainer,
+    onPrimaryContainer = MuvioCrimsonGlow,
+    secondary = MuvioChampagne,
     onSecondary = Color(0xFF140F05),
     secondaryContainer = MuvioSurfaceElevated,
     onSecondaryContainer = MuvioTextPrimary,
@@ -25,15 +25,15 @@ private val MuvioDarkColorScheme = darkColorScheme(
     surfaceVariant = MuvioSurfaceElevated,
     onSurfaceVariant = MuvioTextSecondary,
     outline = MuvioOutline,
-    error = MuvioHotRed,
+    error = MuvioLiveRed,
     onError = Color.White
 )
 
 val MuvioShapes = Shapes(
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(32.dp)
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(34.dp)
 )
 
 @Composable

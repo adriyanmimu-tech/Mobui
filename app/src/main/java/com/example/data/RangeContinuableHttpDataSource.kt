@@ -12,7 +12,11 @@ import androidx.media3.datasource.HttpDataSource
 import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
+import java.net.SocketTimeoutException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -24,6 +28,9 @@ import okhttp3.Response
  * (HLS playlists, segments, subtitles, direct MP4s) AND proxy servers that cap individual
  * HTTP 206 Partial Content responses into fixed virtual chunks (e.g. 512 KB / 3 MB per request
  * with `Content-Range: bytes start-end/total`).
+ *
+ * Includes background lookahead prefetching of the next 206 chunk once 55% of the current chunk
+ * has been read, eliminating chunk-boundary round-trip stalls during high-bitrate playback.
  */
 @OptIn(UnstableApi::class)
 class RangeContinuableHttpDataSource(
@@ -34,8 +41,8 @@ class RangeContinuableHttpDataSource(
 
     class Factory(
         private val headers: Map<String, String> = emptyMap(),
-        private val connectTimeoutMs: Int = 12_000,
-        private val readTimeoutMs: Int = 20_000,
+        private val connectTimeoutMs: Int = 15_000,
+        private val readTimeoutMs: Int = 25_000,
         private val userAgent: String = DEFAULT_USER_AGENT
     ) : DataSource.Factory {
 
@@ -54,6 +61,30 @@ class RangeContinuableHttpDataSource(
         )
     }
 
+    private class PrefetchedChunk(
+        val expectedStartOffset: Long,
+        val call: Call
+    ) {
+        val latch = CountDownLatch(1)
+
+        @Volatile
+        var response: Response? = null
+
+        @Volatile
+        var error: IOException? = null
+
+        @Volatile
+        var cancelled: Boolean = false
+
+        fun cancelAndClose() {
+            cancelled = true
+            runCatching { call.cancel() }
+            runCatching { response?.close() }
+            response = null
+            latch.countDown()
+        }
+    }
+
     private var currentDataSpec: DataSpec? = null
     private var currentUri: Uri? = null
     private var activeResponse: Response? = null
@@ -61,16 +92,22 @@ class RangeContinuableHttpDataSource(
     private var opened = false
 
     private var currentPosition: Long = 0L
+    private var currentChunkStart: Long = 0L
+    private var currentChunkEndExclusive: Long = C.LENGTH_UNSET.toLong()
     private var requestedEndExclusive: Long = C.LENGTH_UNSET.toLong()
     private var bytesRemainingToDeliver: Long = C.LENGTH_UNSET.toLong()
     private var totalContentLength: Long = C.LENGTH_UNSET.toLong()
     private var supportsChunkContinuation: Boolean = false
     private var responseHeaders: Map<String, List<String>> = emptyMap()
+    private var prefetchedNextChunk: PrefetchedChunk? = null
 
     override fun open(dataSpec: DataSpec): Long {
+        cancelPrefetch()
         this.currentDataSpec = dataSpec
         this.currentUri = dataSpec.uri
         this.currentPosition = dataSpec.position
+        this.currentChunkStart = dataSpec.position
+        this.currentChunkEndExclusive = C.LENGTH_UNSET.toLong()
         this.requestedEndExclusive = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
             dataSpec.position + dataSpec.length
         } else {
@@ -81,7 +118,7 @@ class RangeContinuableHttpDataSource(
 
         transferInitializing(dataSpec)
 
-        val response = executeChunkRequest(
+        val response = executeChunkRequestWithRetry(
             dataSpec = dataSpec,
             startOffset = dataSpec.position,
             endInclusive = if (requestedEndExclusive != C.LENGTH_UNSET.toLong()) {
@@ -154,6 +191,8 @@ class RangeContinuableHttpDataSource(
 
         if (code == 206 && contentRange != null && contentRange.totalLength > 0L) {
             this.totalContentLength = contentRange.totalLength
+            this.currentChunkStart = dataSpec.position
+            this.currentChunkEndExclusive = contentRange.end + 1L
             if (contentRange.start < dataSpec.position) {
                 try {
                     skipFully(inputStream, dataSpec.position - contentRange.start)
@@ -250,10 +289,91 @@ class RangeContinuableHttpDataSource(
                 if (bytesRemainingToDeliver != C.LENGTH_UNSET.toLong()) {
                     bytesRemainingToDeliver = (bytesRemainingToDeliver - bytesRead).coerceAtLeast(0L)
                 }
+                maybeStartNextChunkPrefetch(spec)
                 bytesTransferred(bytesRead)
                 return bytesRead
             }
         }
+    }
+
+    private fun maybeStartNextChunkPrefetch(dataSpec: DataSpec) {
+        if (!supportsChunkContinuation || prefetchedNextChunk != null) return
+        val chunkEnd = currentChunkEndExclusive
+        if (chunkEnd == C.LENGTH_UNSET.toLong() || chunkEnd <= currentChunkStart) return
+        if (totalContentLength > 0L && chunkEnd >= totalContentLength) return
+        if (requestedEndExclusive != C.LENGTH_UNSET.toLong() && chunkEnd >= requestedEndExclusive) return
+
+        val chunkSize = chunkEnd - currentChunkStart
+        val readInChunk = currentPosition - currentChunkStart
+        if (chunkSize <= 0L || readInChunk * 100L < chunkSize * 55L) return
+
+        val endInclusive = computeEndInclusive()
+        if (endInclusive != C.LENGTH_UNSET.toLong() && endInclusive < chunkEnd) return
+
+        val request = runCatching {
+            buildChunkRequest(
+                dataSpec = dataSpec,
+                startOffset = chunkEnd,
+                endInclusive = endInclusive,
+                forceRangeHeader = true
+            )
+        }.getOrNull() ?: return
+
+        val call = okHttpClient.newCall(request)
+        val pending = PrefetchedChunk(expectedStartOffset = chunkEnd, call = call)
+        prefetchedNextChunk = pending
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                pending.error = e
+                pending.latch.countDown()
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                if (pending.cancelled) {
+                    runCatching { response.close() }
+                } else {
+                    pending.response = response
+                }
+                pending.latch.countDown()
+            }
+        })
+    }
+
+    private fun takePrefetchedResponseIfMatching(startOffset: Long): Response? {
+        val pending = prefetchedNextChunk ?: return null
+        prefetchedNextChunk = null
+        if (pending.expectedStartOffset != startOffset) {
+            pending.cancelAndClose()
+            return null
+        }
+        return try {
+            val completed = pending.latch.await(15_000L, TimeUnit.MILLISECONDS)
+            if (!completed) {
+                pending.cancelAndClose()
+                null
+            } else {
+                val resp = pending.response
+                pending.response = null
+                resp
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            pending.cancelAndClose()
+            null
+        }
+    }
+
+    private fun cancelPrefetch() {
+        prefetchedNextChunk?.cancelAndClose()
+        prefetchedNextChunk = null
+    }
+
+    private fun computeEndInclusive(): Long = when {
+        requestedEndExclusive != C.LENGTH_UNSET.toLong() && totalContentLength > 0L ->
+            minOf(requestedEndExclusive, totalContentLength) - 1L
+        requestedEndExclusive != C.LENGTH_UNSET.toLong() ->
+            requestedEndExclusive - 1L
+        else -> C.LENGTH_UNSET.toLong()
     }
 
     private fun openNextChunkIfAvailable(dataSpec: DataSpec): Boolean {
@@ -263,27 +383,28 @@ class RangeContinuableHttpDataSource(
 
         closeActiveChunk()
 
-        val endInclusive = when {
-            requestedEndExclusive != C.LENGTH_UNSET.toLong() && totalContentLength > 0L ->
-                minOf(requestedEndExclusive, totalContentLength) - 1L
-            requestedEndExclusive != C.LENGTH_UNSET.toLong() ->
-                requestedEndExclusive - 1L
-            else -> C.LENGTH_UNSET.toLong()
-        }
-
+        val endInclusive = computeEndInclusive()
         if (endInclusive != C.LENGTH_UNSET.toLong() && endInclusive < currentPosition) {
             return false
         }
 
         var lastError: IOException? = null
-        for (attempt in 0..1) {
+        val prefetched = takePrefetchedResponseIfMatching(currentPosition)
+        for (attempt in 0..2) {
             try {
-                val response = executeChunkRequest(
-                    dataSpec = dataSpec,
-                    startOffset = currentPosition,
-                    endInclusive = endInclusive,
-                    forceRangeHeader = true
-                )
+                val response = if (attempt == 0 && prefetched != null) {
+                    prefetched
+                } else {
+                    if (attempt > 0) {
+                        runCatching { Thread.sleep(if (attempt == 1) 200L else 500L) }
+                    }
+                    executeChunkRequest(
+                        dataSpec = dataSpec,
+                        startOffset = currentPosition,
+                        endInclusive = endInclusive,
+                        forceRangeHeader = true
+                    )
+                }
                 val code = response.code
                 if (code == 416) {
                     response.close()
@@ -308,11 +429,17 @@ class RangeContinuableHttpDataSource(
                         throw IOException("Range gap: expected $currentPosition, got ${nextRange.start}")
                     }
                     totalContentLength = nextRange.totalLength
+                    currentChunkStart = currentPosition
+                    currentChunkEndExclusive = nextRange.end + 1L
                     supportsChunkContinuation = (nextRange.end + 1L) < nextRange.totalLength
                 } else if (code == 200) {
                     skipFully(nextStream, currentPosition)
+                    currentChunkStart = currentPosition
+                    currentChunkEndExclusive = C.LENGTH_UNSET.toLong()
                     supportsChunkContinuation = false
                 } else {
+                    currentChunkStart = currentPosition
+                    currentChunkEndExclusive = C.LENGTH_UNSET.toLong()
                     supportsChunkContinuation = false
                 }
                 activeResponse = response
@@ -329,12 +456,30 @@ class RangeContinuableHttpDataSource(
         )
     }
 
-    private fun executeChunkRequest(
+    private fun executeChunkRequestWithRetry(
         dataSpec: DataSpec,
         startOffset: Long,
         endInclusive: Long,
         forceRangeHeader: Boolean
     ): Response {
+        return try {
+            executeChunkRequest(dataSpec, startOffset, endInclusive, forceRangeHeader)
+        } catch (firstErr: HttpDataSource.HttpDataSourceException) {
+            if (firstErr.cause is SocketTimeoutException) {
+                runCatching { Thread.sleep(250L) }
+                executeChunkRequest(dataSpec, startOffset, endInclusive, forceRangeHeader)
+            } else {
+                throw firstErr
+            }
+        }
+    }
+
+    private fun buildChunkRequest(
+        dataSpec: DataSpec,
+        startOffset: Long,
+        endInclusive: Long,
+        forceRangeHeader: Boolean
+    ): Request {
         val urlString = dataSpec.uri.toString().trim()
         val requestBuilder = try {
             Request.Builder().url(urlString)
@@ -361,7 +506,6 @@ class RangeContinuableHttpDataSource(
         }
         mergedHeaders.forEach { (k, v) ->
             if (!k.equals("Range", ignoreCase = true)) {
-                // Guard against malformed non-ASCII headers from upstream APIs
                 runCatching { requestBuilder.header(k, v) }
             }
         }
@@ -379,8 +523,18 @@ class RangeContinuableHttpDataSource(
             requestBuilder.header("Accept-Encoding", "identity")
         }
 
+        return requestBuilder.build()
+    }
+
+    private fun executeChunkRequest(
+        dataSpec: DataSpec,
+        startOffset: Long,
+        endInclusive: Long,
+        forceRangeHeader: Boolean
+    ): Response {
+        val request = buildChunkRequest(dataSpec, startOffset, endInclusive, forceRangeHeader)
         return try {
-            okHttpClient.newCall(requestBuilder.build()).execute()
+            okHttpClient.newCall(request).execute()
         } catch (e: IOException) {
             throw HttpDataSource.HttpDataSourceException.createForIOException(
                 e,
@@ -421,9 +575,11 @@ class RangeContinuableHttpDataSource(
     override fun getResponseHeaders(): Map<String, List<String>> = responseHeaders
 
     override fun close() {
+        cancelPrefetch()
         closeActiveChunk()
         currentDataSpec = null
         currentUri = null
+        currentChunkEndExclusive = C.LENGTH_UNSET.toLong()
         supportsChunkContinuation = false
         if (opened) {
             opened = false

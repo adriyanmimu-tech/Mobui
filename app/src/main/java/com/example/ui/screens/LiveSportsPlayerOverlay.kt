@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.BorderStroke
@@ -28,6 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import com.example.ui.theme.Fullscreen
+import com.example.ui.theme.FullscreenExit
 import com.example.ui.theme.Pause
 import com.example.ui.theme.SportsSoccer
 import com.example.ui.theme.VolumeOff
@@ -47,10 +51,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -59,18 +63,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
-import com.example.data.MuvioExoPlayerFactory
 import coil.compose.AsyncImage
+import com.example.data.MuvioExoPlayerFactory
 import com.example.model.LiveMatchItem
 import com.example.model.MediaItem
 import com.example.model.StaffMember
 import com.example.ui.components.MediaPosterCard
-import com.example.ui.theme.MuvioBg
 import com.example.ui.theme.MuvioEmerald
 import com.example.ui.theme.MuvioLiveRed
 import com.example.ui.theme.MuvioOutline
@@ -85,14 +94,37 @@ fun LiveSportsPlayerOverlay(
     match: LiveMatchItem,
     onClose: () -> Unit
 ) {
-    BackHandler(onBack = onClose)
-
     val context = LocalContext.current
+    val activity = context as? Activity
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     var isPlaying by remember { mutableStateOf(true) }
     var isMuted by remember { mutableStateOf(false) }
+    var isFullscreen by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var retryNonce by remember { mutableIntStateOf(0) }
+    val currentIsPlaying by rememberUpdatedState(isPlaying)
+
+    BackHandler {
+        if (isFullscreen) {
+            isFullscreen = false
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            onClose()
+        }
+    }
+
+    LaunchedEffect(isFullscreen, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (isFullscreen) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     val exoPlayer = remember(match.id, match.streamUrl, retryNonce) {
         MuvioExoPlayerFactory.createLivePlayer(context, match.headers).apply {
@@ -106,6 +138,9 @@ fun LiveSportsPlayerOverlay(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) {
+                    errorMessage = null
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -117,7 +152,24 @@ fun LiveSportsPlayerOverlay(
         onDispose {
             exoPlayer.removeListener(listener)
             exoPlayer.release()
+            activity?.window?.let { win ->
+                WindowCompat.getInsetsController(win, win.decorView).show(WindowInsetsCompat.Type.systemBars())
+            }
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+    }
+
+    // Properly pause/resume live stream when app moves to/from background
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> exoPlayer.pause()
+                Lifecycle.Event.ON_RESUME -> if (currentIsPlaying) exoPlayer.play()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(isPlaying, exoPlayer) {
@@ -131,63 +183,68 @@ fun LiveSportsPlayerOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.96f))
-            .statusBarsPadding()
-            .navigationBarsPadding()
+            .background(Color.Black.copy(alpha = 0.98f))
+            .then(if (!isFullscreen) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)
             .testTag("live_sports_player_overlay")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top bar with league & close
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            // Top bar with league & close (hidden in fullscreen except overlay button)
+            if (!isFullscreen) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        color = MuvioLiveRed.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(6.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
+                        Surface(
+                            color = MuvioLiveRed.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "● LIVE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MuvioLiveRed,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "● LIVE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MuvioLiveRed,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            text = "${match.homeTeam} vs ${match.awayTeam}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MuvioTextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "${match.homeTeam} vs ${match.awayTeam}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MuvioTextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
 
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.testTag("close_live_sports_player")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close live sports player",
-                        tint = MuvioTextPrimary
-                    )
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.testTag("close_live_sports_player")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close live sports player",
+                            tint = MuvioTextPrimary
+                        )
+                    }
                 }
             }
 
-            // 16:9 Live HLS Player Stage
+            // 16:9 or Fullscreen Live HLS Player Stage
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    .background(Color.Black),
+                modifier = if (isFullscreen) {
+                    Modifier.fillMaxSize().background(Color.Black)
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .background(Color.Black)
+                },
                 contentAlignment = Alignment.Center
             ) {
                 AndroidView(
@@ -195,11 +252,57 @@ fun LiveSportsPlayerOverlay(
                         PlayerView(ctx).apply {
                             player = exoPlayer
                             useController = false
+                            keepScreenOn = isPlaying
                         }
                     },
-                    update = { it.player = exoPlayer },
+                    update = {
+                        if (it.player !== exoPlayer) it.player = exoPlayer
+                        it.keepScreenOn = isPlaying
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Floating Fullscreen Exit / Quick Controls inside Fullscreen mode
+                if (isFullscreen) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                        ) {
+                            IconButton(onClick = { isMuted = !isMuted }) {
+                                Icon(
+                                    imageVector = if (isMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = if (isMuted) "Unmute" else "Mute",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    isFullscreen = false
+                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FullscreenExit,
+                                    contentDescription = "Exit fullscreen",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
 
                 if (isBuffering && errorMessage == null) {
                     CircularProgressIndicator(color = MuvioEmerald)
@@ -249,61 +352,87 @@ fun LiveSportsPlayerOverlay(
                 }
             }
 
-            // Player Quick Controls & Scoreboard Info
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Rounded.SportsSoccer,
-                        contentDescription = null,
-                        tint = MuvioEmerald,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = match.league,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MuvioTextPrimary
-                        )
-                        Text(
-                            text = "${match.sportType} • ${match.scoreOrTime}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MuvioEmerald
-                        )
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(
-                        color = MuvioSurfaceElevated,
-                        shape = CircleShape,
-                        border = BorderStroke(1.dp, MuvioOutline)
+            // Player Quick Controls & Scoreboard Info (portrait mode)
+            if (!isFullscreen) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
-                        IconButton(onClick = { isPlaying = !isPlaying }) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                tint = MuvioTextPrimary
+                        Icon(
+                            imageVector = Icons.Rounded.SportsSoccer,
+                            contentDescription = null,
+                            tint = MuvioEmerald,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = match.league,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MuvioTextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${match.sportType} • ${match.scoreOrTime}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MuvioEmerald
                             )
                         }
                     }
-                    Surface(
-                        color = MuvioSurfaceElevated,
-                        shape = CircleShape,
-                        border = BorderStroke(1.dp, MuvioOutline)
-                    ) {
-                        IconButton(onClick = { isMuted = !isMuted }) {
-                            Icon(
-                                imageVector = if (isMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                                contentDescription = if (isMuted) "Unmute" else "Mute",
-                                tint = MuvioTextPrimary
-                            )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            color = MuvioSurfaceElevated,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, MuvioOutline)
+                        ) {
+                            IconButton(onClick = { isPlaying = !isPlaying }) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = MuvioTextPrimary
+                                )
+                            }
+                        }
+                        Surface(
+                            color = MuvioSurfaceElevated,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, MuvioOutline)
+                        ) {
+                            IconButton(onClick = { isMuted = !isMuted }) {
+                                Icon(
+                                    imageVector = if (isMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = if (isMuted) "Unmute" else "Mute",
+                                    tint = MuvioTextPrimary
+                                )
+                            }
+                        }
+                        Surface(
+                            color = MuvioSurfaceElevated,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, MuvioOutline)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    isFullscreen = true
+                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                },
+                                modifier = Modifier.testTag("live_sports_fullscreen_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Fullscreen,
+                                    contentDescription = "Fullscreen live sports",
+                                    tint = MuvioTextPrimary
+                                )
+                            }
                         }
                     }
                 }

@@ -91,6 +91,7 @@ fun PlaybackQualityAudioSheet(
     selectedLanguage: String,
     subtitles: List<SubtitleTrack>,
     selectedSubIndex: Int,
+    subtitleSize: String = "Medium",
     playbackSpeed: Float,
     isLoadingStream: Boolean,
     hasBengaliTrack: Boolean = false,
@@ -99,6 +100,7 @@ fun PlaybackQualityAudioSheet(
     onSelectStreamIndex: (Int) -> Unit,
     onSelectDub: (DubVersion) -> Unit,
     onSelectSubtitle: (Int) -> Unit,
+    onSelectSubtitleSize: (String) -> Unit = {},
     onRequestBengaliSubtitle: () -> Unit = {},
     onSelectSpeed: (Float) -> Unit,
     onDismiss: () -> Unit
@@ -332,6 +334,44 @@ fun PlaybackQualityAudioSheet(
                 }
             }
 
+            // 3b. Subtitle Font Size
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "SUBTITLE SIZE",
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                color = MuvioChampagne
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf("Small", "Medium", "Large").forEach { sizeOption ->
+                    val active = sizeOption.equals(subtitleSize, ignoreCase = true)
+                    Surface(
+                        color = if (active) MuvioChampagne else MuvioSurfaceElevated,
+                        border = BorderStroke(0.8.dp, if (active) MuvioChampagne else MuvioOutline),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onSelectSubtitleSize(sizeOption) }
+                            .testTag("subtitle_size_${sizeOption.lowercase()}")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = sizeOption,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (active) Color(0xFF140F05) else MuvioTextPrimary
+                            )
+                        }
+                    }
+                }
+            }
+
             // 4. Playback Speed
             Spacer(modifier = Modifier.height(18.dp))
             Text(
@@ -485,7 +525,8 @@ fun NoirEpisodesSection(
     selectedEpisode: Int,
     onSelectSeason: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
-    onDownloadEpisode: (EpisodeItem) -> Unit
+    onDownloadEpisode: (EpisodeItem) -> Unit,
+    onLoadMoreEpisodes: () -> Unit = {}
 ) {
     val episodes = media.episodes
     if (episodes.isEmpty()) return
@@ -797,6 +838,33 @@ fun NoirEpisodesSection(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        if (episodes.size < 500) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    color = MuvioSurfaceElevated,
+                    border = BorderStroke(0.9.dp, MuvioChampagne.copy(alpha = 0.65f)),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(onClick = onLoadMoreEpisodes)
+                        .testTag("load_more_episodes_sheet_btn")
+                ) {
+                    Text(
+                        text = "+ Load More Episodes",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MuvioChampagneLight,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                    )
                 }
             }
         }
@@ -1129,6 +1197,33 @@ fun NoirCompactAudioEpisodesSection(
                             }
                         }
                     }
+                    if (episodes.size < 500) {
+                        item(key = "compact_ep_load_more") {
+                            Surface(
+                                color = MuvioSurfaceElevated,
+                                border = BorderStroke(0.9.dp, MuvioChampagne.copy(alpha = 0.65f)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable(onClick = onLoadMoreEpisodes)
+                                    .testTag("episode_tile_load_more")
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "+ More",
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = MuvioChampagneLight
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else if (seasonsCount > 1) {
@@ -1153,6 +1248,7 @@ fun AllEpisodesBottomSheet(
     onSelectSeason: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onDownloadEpisode: (EpisodeItem) -> Unit,
+    onLoadMoreEpisodes: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -1201,7 +1297,8 @@ fun AllEpisodesBottomSheet(
                         onSelectEpisode(epNum)
                         onDismiss()
                     },
-                    onDownloadEpisode = onDownloadEpisode
+                    onDownloadEpisode = onDownloadEpisode,
+                    onLoadMoreEpisodes = onLoadMoreEpisodes
                 )
             }
         }

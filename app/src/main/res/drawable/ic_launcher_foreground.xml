@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_muvio_noir_logo_1795061163701"
+        android:drawable="@drawable/ic_muvio_ribbon_logo"
         android:gravity="center" />
 </layer-list>

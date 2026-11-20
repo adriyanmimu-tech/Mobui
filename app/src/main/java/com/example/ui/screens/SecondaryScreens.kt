@@ -23,31 +23,33 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
 import com.example.ui.theme.Api
-import com.example.ui.theme.AutoStories
 import com.example.ui.theme.Bookmark
 import com.example.ui.theme.BookmarkBorder
 import com.example.ui.theme.ChatBubbleOutline
 import com.example.ui.theme.DeleteOutline
+import com.example.ui.theme.Explore
 import com.example.ui.theme.Pause
 import com.example.ui.theme.VolumeOff
 import com.example.ui.theme.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -71,6 +73,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -82,19 +91,24 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import coil.compose.AsyncImage
+import com.example.model.ApiCategory
 import com.example.model.DownloadItem
 import com.example.model.DownloadStatus
 import com.example.model.FilterOptions
 import com.example.model.MediaItem
 import com.example.model.MediaType
-import com.example.model.NovelItem
+import com.example.model.PlatformBrand
+import com.example.model.ShortReelItem
 import com.example.ui.components.MediaPosterCard
 import com.example.ui.components.MuvioBrandMark
 import com.example.ui.components.MuvioPosterArtwork
 import com.example.ui.theme.MuvioBg
 import com.example.ui.theme.MuvioChampagne
 import com.example.ui.theme.MuvioChampagneLight
-import com.example.ui.theme.MuvioCyan
+import com.example.ui.theme.MuvioCrimson
+import com.example.ui.theme.MuvioCrimsonBorder
+import com.example.ui.theme.MuvioCrimsonContainer
+import com.example.ui.theme.MuvioCrimsonGlow
 import com.example.ui.theme.MuvioEmerald
 import com.example.ui.theme.MuvioEmeraldContainer
 import com.example.ui.theme.MuvioGlass
@@ -117,7 +131,9 @@ fun ShortsScreen(
     uiState: MuvioUiState,
     onToggleLike: (String) -> Unit,
     onToggleSave: (String) -> Unit,
-    onWatchFullSeries: (String) -> Unit,
+    onWatchFullSeries: (ShortReelItem) -> Unit,
+    onResolveReelStream: (ShortReelItem, Boolean) -> Unit = { _, _ -> },
+    onRetryShorts: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val reels = uiState.shortReels
@@ -125,23 +141,77 @@ fun ShortsScreen(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(MuvioBg),
+                .background(MuvioBg)
+                .padding(horizontal = 28.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = MuvioChampagne)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Loading live short dramas...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MuvioTextSecondary
-                )
+                if (uiState.isLoadingShorts || uiState.isLoadingHome) {
+                    CircularProgressIndicator(color = MuvioChampagne)
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Loading live short dramas...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MuvioTextSecondary
+                    )
+                } else {
+                    Text(
+                        text = "No Short Dramas Loaded",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MuvioTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Check your connection or tap below to fetch fresh reels.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MuvioTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Surface(
+                        color = MuvioCrimson,
+                        shape = RoundedCornerShape(22.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(22.dp))
+                            .clickable(onClick = onRetryShorts)
+                            .testTag("shorts_retry_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "Reload Shorts",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Reload Shorts",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
             }
         }
         return
     }
     val pagerState = rememberPagerState(pageCount = { reels.size })
     var isMuted by remember { mutableStateOf(false) }
+
+    // Automatically resolve the visible reel's stream and prefetch the next reel for instant swiping
+    LaunchedEffect(pagerState.currentPage, reels) {
+        val current = reels.getOrNull(pagerState.currentPage)
+        if (current != null) {
+            onResolveReelStream(current, false)
+        }
+        val next = reels.getOrNull(pagerState.currentPage + 1)
+        if (next != null) {
+            onResolveReelStream(next, false)
+        }
+    }
 
     Box(
         modifier = modifier
@@ -155,6 +225,13 @@ fun ShortsScreen(
             val reel = reels[page]
             val isCurrentPage = pagerState.currentPage == page
             var paused by remember { mutableStateOf(false) }
+            val resolvedStreams = uiState.shortStreamsByReelId[reel.id].orEmpty()
+            val isResolvingStream = reel.id in uiState.loadingShortReelIds
+            val resolveError = uiState.shortStreamErrorByReelId[reel.id]
+            var activeStreamIdx by remember(reel.id, resolvedStreams.size) { mutableIntStateOf(0) }
+            val activeStream = resolvedStreams.getOrNull(activeStreamIdx)
+            val playableUrl = activeStream?.streamUrl?.takeIf { it.isNotBlank() } ?: reel.streamUrl
+            val playableHeaders = activeStream?.headers.orEmpty()
 
             Box(
                 modifier = Modifier
@@ -168,18 +245,73 @@ fun ShortsScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                if (isCurrentPage && reel.streamUrl.isNotBlank()) {
+                var isBufferingVideo by remember(reel.id) { mutableStateOf(false) }
+                var shortPlaybackError by remember(reel.id, playableUrl) { mutableStateOf<String?>(null) }
+                var retryTick by remember(reel.id) { mutableIntStateOf(0) }
+
+                if (isCurrentPage && playableUrl.isNotBlank()) {
                     val context = LocalContext.current
-                    val shortPlayer = remember(reel.streamUrl) {
-                        MuvioExoPlayerFactory.createShortsPlayer(context).apply {
-                            setMediaItem(ExoMediaItem.fromUri(reel.streamUrl))
+                    val lifecycleOwner = LocalLifecycleOwner.current
+                    val currentPaused by rememberUpdatedState(paused)
+                    val currentStreamsSize by rememberUpdatedState(resolvedStreams.size)
+                    val currentStreamIdx by rememberUpdatedState(activeStreamIdx)
+
+                    val shortPlayer = remember(playableUrl, playableHeaders, retryTick) {
+                        MuvioExoPlayerFactory.createShortsPlayer(context, playableHeaders).apply {
+                            val isDirectMp4 = playableUrl.contains(".mp4", ignoreCase = true) &&
+                                !playableUrl.contains(".m3u8", ignoreCase = true)
+                            val isHls = !isDirectMp4 && (
+                                playableUrl.contains(".m3u8", ignoreCase = true) ||
+                                    playableUrl.contains("m3u8", ignoreCase = true) ||
+                                    playableUrl.contains("/api/hls/", ignoreCase = true) ||
+                                    activeStream?.quality?.contains("HLS", ignoreCase = true) == true
+                                )
+                            val mediaBuilder = ExoMediaItem.Builder().setUri(playableUrl)
+                            if (isHls) {
+                                mediaBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                            }
+                            setMediaItem(mediaBuilder.build())
                             repeatMode = Player.REPEAT_MODE_ONE
                             prepare()
-                            playWhenReady = true
+                            playWhenReady = !paused
                         }
                     }
                     DisposableEffect(shortPlayer) {
-                        onDispose { shortPlayer.release() }
+                        isBufferingVideo = true
+                        val listener = object : Player.Listener {
+                            override fun onPlaybackStateChanged(playbackState: Int) {
+                                isBufferingVideo = playbackState == Player.STATE_BUFFERING
+                                if (playbackState == Player.STATE_READY) {
+                                    shortPlaybackError = null
+                                    isBufferingVideo = false
+                                }
+                            }
+
+                            override fun onPlayerError(error: PlaybackException) {
+                                isBufferingVideo = false
+                                if (currentStreamIdx + 1 < currentStreamsSize) {
+                                    activeStreamIdx = currentStreamIdx + 1
+                                } else {
+                                    shortPlaybackError = error.localizedMessage ?: "ভিডিও চালু হয়নি"
+                                }
+                            }
+                        }
+                        shortPlayer.addListener(listener)
+                        onDispose {
+                            shortPlayer.removeListener(listener)
+                            shortPlayer.release()
+                        }
+                    }
+                    DisposableEffect(lifecycleOwner, shortPlayer) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            when (event) {
+                                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> shortPlayer.pause()
+                                Lifecycle.Event.ON_RESUME -> if (!currentPaused) shortPlayer.play()
+                                else -> Unit
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
                     }
                     LaunchedEffect(paused, isMuted, shortPlayer) {
                         shortPlayer.playWhenReady = !paused
@@ -202,6 +334,61 @@ fun ShortsScreen(
                         },
                         modifier = Modifier.fillMaxSize()
                     )
+                }
+
+                if (isCurrentPage && (isResolvingStream || isBufferingVideo) && shortPlaybackError == null && resolveError == null) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.52f),
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(56.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                color = MuvioChampagne,
+                                strokeWidth = 2.6.dp,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
+
+                val combinedError = shortPlaybackError ?: resolveError
+                if (isCurrentPage && combinedError != null && !isResolvingStream) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.78f),
+                        border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable {
+                                shortPlaybackError = null
+                                activeStreamIdx = 0
+                                retryTick++
+                                onResolveReelStream(reel, true)
+                            }
+                            .testTag("shorts_stream_retry_${reel.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "Retry video",
+                                tint = MuvioChampagne,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Tap to Retry Video",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MuvioChampagneLight
+                            )
+                        }
+                    }
                 }
 
                 Box(
@@ -260,7 +447,7 @@ fun ShortsScreen(
                     }
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        IconButton(onClick = { onWatchFullSeries(reel.linkedMediaId) }) {
+                        IconButton(onClick = { onWatchFullSeries(reel) }) {
                             Icon(
                                 imageVector = Icons.Outlined.ChatBubbleOutline,
                                 contentDescription = "Comments",
@@ -322,7 +509,7 @@ fun ShortsScreen(
                     Surface(
                         color = MuvioEmerald,
                         shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.clickable { onWatchFullSeries(reel.linkedMediaId) }
+                        modifier = Modifier.clickable { onWatchFullSeries(reel) }
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -378,169 +565,281 @@ fun ShortsScreen(
     }
 }
 
-@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NovelHubScreen(
+fun ExploreHubScreen(
     uiState: MuvioUiState,
+    onMediaClick: (MediaItem) -> Unit,
+    onPlatformClick: (PlatformBrand) -> Unit,
+    onApiCategoryClick: (ApiCategory) -> Unit,
+    onOpenSearch: () -> Unit,
+    onRefreshApi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var activeNovel by remember { mutableStateOf<NovelItem?>(null) }
+    val filters = remember { listOf("All", "Top Rated", "Movies", "Series", "Anime", "Bengali") }
+    var selectedFilter by remember { mutableStateOf("All") }
 
-    Column(
+    val filteredCatalog = remember(uiState.allMedia, selectedFilter) {
+        when (selectedFilter) {
+            "Top Rated" -> uiState.allMedia.sortedByDescending { it.rating }
+            "Movies" -> uiState.allMedia.filter { it.mediaType == MediaType.MOVIE }
+            "Series" -> uiState.allMedia.filter { it.mediaType == MediaType.SERIES || it.mediaType == MediaType.DRAMA }
+            "Anime" -> uiState.allMedia.filter { it.mediaType == MediaType.ANIME || "anime" in it.sectionTags }
+            "Bengali" -> uiState.allMedia.filter { it.languageBadge.equals("Bengali", true) || "bengali" in it.sectionTags }
+            else -> uiState.allMedia
+        }
+    }
+
+    LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .background(MuvioBg)
-            .statusBarsPadding()
+            .statusBarsPadding(),
+        contentPadding = PaddingValues(bottom = 118.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "NovelHub",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MuvioTextPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(color = MuvioHotRed, shape = RoundedCornerShape(6.dp)) {
+        item(key = "explore_header") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "HOT",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            text = "Explore",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontFamily = PlayfairFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MuvioTextPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            color = MuvioCrimsonContainer,
+                            border = BorderStroke(0.8.dp, MuvioCrimsonBorder),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "LIVE CATALOG",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp
+                                ),
+                                color = MuvioCrimsonGlow,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "${uiState.allMedia.size} titles • Platforms, genres & top rated",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MuvioTextSecondary
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Rounded.Explore,
+                    contentDescription = null,
+                    tint = MuvioChampagne,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+
+        // Quick Search Bar Trigger
+        item(key = "explore_search_bar") {
+            Surface(
+                color = MuvioSurfaceCard,
+                border = BorderStroke(1.dp, MuvioGlassBorder),
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .clickable(onClick = onOpenSearch)
+                    .testTag("explore_search_trigger")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "Search",
+                        tint = MuvioChampagne,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Search movies, web series, anime...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MuvioTextMuted
+                    )
+                }
+            }
+        }
+
+        // Streaming Platforms Strip
+        if (uiState.platforms.isNotEmpty()) {
+            item(key = "explore_platforms") {
+                Text(
+                    text = "STREAMING PLATFORMS",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                    color = MuvioChampagne,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(uiState.platforms, key = { "exp_plat_${it.apiName}" }) { brand ->
+                        NoirPlatformTile(
+                            brand = brand,
+                            onClick = { onPlatformClick(brand) }
                         )
                     }
                 }
-                Text(
-                    text = "Original stories behind Muvio hit dramas",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MuvioTextSecondary
-                )
             }
-            Icon(
-                imageVector = Icons.Rounded.AutoStories,
-                contentDescription = null,
-                tint = MuvioEmerald,
-                modifier = Modifier.size(28.dp)
-            )
         }
 
-        LazyColumn(
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 110.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(uiState.novels, key = { it.id }) { novel ->
-                Surface(
-                    color = MuvioSurfaceCard,
-                    border = BorderStroke(1.dp, MuvioOutline),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { activeNovel = novel }
-                        .testTag("novel_card_${novel.id}")
+        // Live API Collections Strip
+        if (uiState.apiCategories.isNotEmpty()) {
+            item(key = "explore_collections") {
+                Text(
+                    text = "COLLECTIONS",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                    color = MuvioTextSecondary,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
+                    items(uiState.apiCategories.take(24), key = { "exp_cat_${it.id}_${it.path}" }) { cat ->
+                        Surface(
+                            color = MuvioSurfaceCard,
+                            border = BorderStroke(0.9.dp, MuvioOutline),
+                            shape = RoundedCornerShape(18.dp),
                             modifier = Modifier
-                                .width(78.dp)
-                                .height(106.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(18.dp))
+                                .clickable { onApiCategoryClick(cat) }
+                                .testTag("explore_cat_${cat.id}")
                         ) {
-                            MuvioPosterArtwork(
-                                poster = novel.poster,
-                                contentDescription = novel.title,
-                                modifier = Modifier.fillMaxSize()
+                            Text(
+                                text = cat.name,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MuvioTextPrimary,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
+                    }
+                }
+            }
+        }
+
+        // Quick Filter Pills for the Live 3-Column Grid
+        item(key = "explore_filters") {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filters) { chip ->
+                    val active = chip == selectedFilter
+                    Surface(
+                        color = if (active) MuvioCrimson else MuvioSurfaceCard,
+                        border = BorderStroke(
+                            0.9.dp,
+                            if (active) MuvioCrimsonGlow else MuvioOutline
+                        ),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { selectedFilter = chip }
+                            .testTag("explore_filter_${chip.lowercase().replace(" ", "_")}")
+                    ) {
+                        Text(
+                            text = chip,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (active) Color.White else MuvioTextSecondary,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (filteredCatalog.isEmpty()) {
+            item(key = "explore_empty") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 42.dp, horizontal = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (uiState.isLoadingHome) {
+                            CircularProgressIndicator(color = MuvioChampagne)
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = novel.title,
-                                style = MaterialTheme.typography.titleMedium,
+                                text = "Syncing live catalog...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MuvioTextSecondary
+                            )
+                        } else {
+                            Text(
+                                text = "No titles matched \"$selectedFilter\"",
+                                style = MaterialTheme.typography.titleSmall,
                                 color = MuvioTextPrimary
                             )
-                            Text(
-                                text = "By ${novel.author} • ${novel.chaptersCount} Chapters",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MuvioEmerald
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = novel.synopsis,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MuvioTextSecondary,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = MuvioChampagne,
+                                shape = RoundedCornerShape(18.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable {
+                                        if (uiState.allMedia.isEmpty()) onRefreshApi() else selectedFilter = "All"
+                                    }
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Star,
-                                        contentDescription = null,
-                                        tint = MuvioGold,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "${novel.rating} • ${novel.genre}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MuvioTextSecondary
-                                    )
-                                }
                                 Text(
-                                    text = "Read Ch.1 >",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MuvioEmerald
+                                    text = if (uiState.allMedia.isEmpty()) "Refresh Catalog" else "Show All",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF140F05),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                 )
                             }
                         }
                     }
                 }
             }
-        }
-    }
-
-    activeNovel?.let { novel ->
-        ModalBottomSheet(
-            onDismissRequest = { activeNovel = null },
-            containerColor = MuvioSurface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 8.dp)
-                    .navigationBarsPadding()
-            ) {
-                Text(
-                    text = novel.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MuvioTextPrimary
-                )
-                Text(
-                    text = "Chapter 1 • ${novel.author}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MuvioEmerald
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = novel.sampleChapter,
-                    style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 25.sp),
-                    color = MuvioTextPrimary
-                )
-                Spacer(modifier = Modifier.height(24.dp))
+        } else {
+            items(filteredCatalog.chunked(3)) { rowItems ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    rowItems.forEach { item ->
+                        MediaPosterCard(
+                            item = item,
+                            onClick = { onMediaClick(item) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - rowItems.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
             }
         }
     }
@@ -597,14 +896,14 @@ fun DownloadsScreen(
                 contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 110.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(downloads, key = { it.mediaId }) { item ->
+                items(downloads, key = { it.downloadId }) { item ->
                     Surface(
                         color = MuvioSurfaceCard,
                         border = BorderStroke(1.dp, MuvioOutline),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onOpenMedia(item.mediaId) }
+                            .clickable { onOpenMedia(item.downloadId) }
                     ) {
                         Row(
                             modifier = Modifier.padding(10.dp),
@@ -632,8 +931,13 @@ fun DownloadsScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
+                                val subtitleMeta = if (item.episodeLabel.isNotBlank()) {
+                                    "${item.episodeLabel} • ${item.quality} • ${item.sizeText}"
+                                } else {
+                                    "${item.quality} • ${item.sizeText}"
+                                }
                                 Text(
-                                    text = "${item.quality} • ${item.sizeText}",
+                                    text = subtitleMeta,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MuvioTextSecondary
                                 )
@@ -653,6 +957,12 @@ fun DownloadsScreen(
                                             color = MuvioEmerald
                                         )
                                     }
+                                } else if (item.status == DownloadStatus.FAILED) {
+                                    Text(
+                                        text = "Download failed • Tap ▶ to retry",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MuvioHotRed
+                                    )
                                 } else {
                                     LinearProgressIndicator(
                                         progress = { item.progress },
@@ -667,7 +977,7 @@ fun DownloadsScreen(
                             }
 
                             if (item.status != DownloadStatus.COMPLETED) {
-                                IconButton(onClick = { onTogglePause(item.mediaId) }) {
+                                IconButton(onClick = { onTogglePause(item.downloadId) }) {
                                     Icon(
                                         imageVector = if (item.status == DownloadStatus.DOWNLOADING) {
                                             Icons.Rounded.Pause
@@ -679,7 +989,7 @@ fun DownloadsScreen(
                                     )
                                 }
                             }
-                            IconButton(onClick = { onRemoveDownload(item.mediaId) }) {
+                            IconButton(onClick = { onRemoveDownload(item.downloadId) }) {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteOutline,
                                     contentDescription = "Delete download",
@@ -701,6 +1011,9 @@ fun MeScreen(
     onToggleAutoPlay: () -> Unit,
     onToggleWifiOnly: () -> Unit,
     onCycleQuality: () -> Unit,
+    onCycleSubtitleSize: () -> Unit = {},
+    onClearHistory: () -> Unit = {},
+    onClearCache: () -> Unit = {},
     onRefreshApi: () -> Unit = {},
     onSelectMeSection: (Int) -> Unit = {},
     onToggleWatchlist: (String) -> Unit = {},
@@ -730,49 +1043,54 @@ fun MeScreen(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 122.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Profile Header
+        // Local Vault Brand Header (Zero Login Required)
         item {
             Surface(
                 color = MuvioSurfaceCard,
-                border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.28f)),
-                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MuvioCrimsonBorder),
+                shape = RoundedCornerShape(22.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    MuvioCrimsonContainer.copy(alpha = 0.7f),
+                                    MuvioSurfaceCard
+                                )
+                            )
+                        )
+                        .padding(18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MuvioBrandMark(size = 50.dp)
+                    MuvioBrandMark(size = 54.dp)
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Muvio Atelier",
-                            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = PlayfairFontFamily),
-                            color = MuvioTextPrimary
+                            text = "Muvio Cinema Vault",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontFamily = PlayfairFontFamily,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MuvioTextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Watchlist: ${watchlistMedia.size}  •  History: ${historyMedia.size}",
+                            text = "List: ${watchlistMedia.size}  •  History: ${historyMedia.size}  •  Offline: ${uiState.downloads.size}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MuvioTextSecondary
-                        )
-                    }
-                    Surface(
-                        color = MuvioEmeraldContainer,
-                        border = BorderStroke(0.8.dp, MuvioChampagne.copy(alpha = 0.5f)),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Text(
-                            text = if (uiState.isApiConnected) "NOIR LIVE" else "NOIR PRO",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MuvioChampagne,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            color = MuvioTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
         }
 
-        // 3-Segment Noir Switcher: Watchlist | History | Settings
+        // 3-Segment Velvet Switcher: Watchlist | History | Settings
         item {
             Surface(
                 color = MuvioSurfaceCard,
@@ -794,7 +1112,7 @@ fun MeScreen(
                             else -> 0
                         }
                         Surface(
-                            color = if (active) MuvioChampagne else Color.Transparent,
+                            color = if (active) MuvioCrimson else Color.Transparent,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .weight(1f)
@@ -813,7 +1131,7 @@ fun MeScreen(
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
                                     ),
-                                    color = if (active) Color(0xFF140F05) else MuvioTextSecondary,
+                                    color = if (active) Color.White else MuvioTextSecondary,
                                     maxLines = 1
                                 )
                             }
@@ -977,6 +1295,29 @@ fun MeScreen(
                         }
                     }
                 } else {
+                    item(key = "history_clear_header") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Recently Watched (${historyMedia.size})",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MuvioTextSecondary
+                            )
+                            Text(
+                                text = "Clear All",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MuvioCrimsonGlow,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(onClick = onClearHistory)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    .testTag("clear_watch_history_header_btn")
+                            )
+                        }
+                    }
                     items(historyMedia, key = { "hist_row_${it.id}" }) { item ->
                         val progress = (uiState.watchProgressByMedia[item.id] ?: 0.25f).coerceIn(0.05f, 1f)
                         Surface(
@@ -1111,30 +1452,19 @@ fun MeScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (uiState.isApiConnected) "MovieBox Live API Connected" else "MovieBox API Sync",
+                                    text = if (uiState.isApiConnected) "Muvio Live Cinema Connected" else "Syncing Muvio Catalog",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MuvioChampagne
                                 )
                                 Text(
-                                    text = uiState.apiStatusMessage,
+                                    text = if (uiState.isApiConnected) {
+                                        "Live catalog active • Watchlist & history saved on this device"
+                                    } else {
+                                        uiState.apiStatusMessage
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MuvioTextSecondary
                                 )
-                                uiState.quotaInfo?.let { q ->
-                                    val quotaLine = buildString {
-                                        if (q.clientName.isNotBlank()) append("${q.clientName} • ")
-                                        append(q.plan.ifBlank { q.quota })
-                                        if (q.expiresAt.isNotBlank()) append(" • Exp ${q.expiresAt}")
-                                    }
-                                    if (quotaLine.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(3.dp))
-                                        Text(
-                                            text = quotaLine,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MuvioCyan
-                                        )
-                                    }
-                                }
                             }
                             Text(
                                 text = if (uiState.isLoadingHome) "..." else "Sync",
@@ -1174,7 +1504,7 @@ fun MeScreen(
                                 Switch(
                                     checked = uiState.autoPlayNext,
                                     onCheckedChange = { onToggleAutoPlay() },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MuvioChampagne)
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MuvioCrimson)
                                 )
                             }
                             Row(
@@ -1189,7 +1519,7 @@ fun MeScreen(
                                 Switch(
                                     checked = uiState.wifiOnlyDownloads,
                                     onCheckedChange = { onToggleWifiOnly() },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = MuvioChampagne)
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MuvioCrimson)
                                 )
                             }
                             Row(
@@ -1202,7 +1532,112 @@ fun MeScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("Default Streaming Quality", style = MaterialTheme.typography.bodyLarge, color = MuvioTextPrimary)
-                                Text(uiState.preferredQuality, style = MaterialTheme.typography.labelLarge, color = MuvioChampagne)
+                                Text(uiState.preferredQuality, style = MaterialTheme.typography.labelLarge, color = MuvioCrimsonGlow)
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(onClick = onCycleSubtitleSize)
+                                    .padding(vertical = 6.dp)
+                                    .testTag("settings_subtitle_size_row"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Subtitle Font Size", style = MaterialTheme.typography.bodyLarge, color = MuvioTextPrimary)
+                                Text(uiState.subtitleSize, style = MaterialTheme.typography.labelLarge, color = MuvioChampagne)
+                            }
+                        }
+                    }
+                }
+
+                item(key = "storage_and_cache_card") {
+                    Text(
+                        text = "Storage & Cache",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MuvioTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MuvioSurfaceCard,
+                        border = BorderStroke(1.dp, MuvioOutline),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Offline Downloads", style = MaterialTheme.typography.bodyMedium, color = MuvioTextSecondary)
+                                Text(
+                                    text = uiState.downloadsStorageText,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MuvioEmerald
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Image & Subtitle Cache", style = MaterialTheme.typography.bodyMedium, color = MuvioTextSecondary)
+                                Text(
+                                    text = uiState.cacheStorageText,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MuvioChampagne
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    color = MuvioSurfaceElevated,
+                                    border = BorderStroke(0.9.dp, MuvioChampagne.copy(alpha = 0.55f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable(onClick = onClearCache)
+                                        .testTag("settings_clear_cache_btn")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 10.dp)
+                                    ) {
+                                        Text(
+                                            text = "Clear Cache",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                            color = MuvioChampagneLight
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    color = MuvioSurfaceElevated,
+                                    border = BorderStroke(0.9.dp, MuvioCrimsonBorder),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable(onClick = onClearHistory)
+                                        .testTag("settings_clear_history_btn")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 10.dp)
+                                    ) {
+                                        Text(
+                                            text = "Clear History",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                            color = MuvioCrimsonGlow
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1240,7 +1675,7 @@ fun SeeAllCategoryScreen(
                 it.genre.contains(selectedGenre, ignoreCase = true) ||
                     it.country.contains(selectedGenre, ignoreCase = true) ||
                     it.subCategory.contains(selectedGenre, ignoreCase = true)
-            }.ifEmpty { itemsList }
+            }
         }
     }
 
@@ -1313,6 +1748,38 @@ fun SeeAllCategoryScreen(
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = MuvioEmerald)
+            }
+        } else if (displayedItems.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "No \"$selectedGenre\" titles in this section",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MuvioTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        color = MuvioEmeraldContainer,
+                        border = BorderStroke(1.dp, MuvioEmerald),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { selectedGenre = "All" }
+                    ) {
+                        Text(
+                            text = "Show All",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MuvioEmerald,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
             }
         } else {
             LazyColumn(

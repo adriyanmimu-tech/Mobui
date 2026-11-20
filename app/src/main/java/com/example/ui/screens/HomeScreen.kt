@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -21,20 +21,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.ApiCategory
-import com.example.model.CategoryBannerItem
 import com.example.model.ContentSource
 import com.example.model.LiveMatchItem
 import com.example.model.MediaItem
@@ -53,6 +54,10 @@ import com.example.ui.components.SectionHeader
 import com.example.ui.theme.MuvioBg
 import com.example.ui.theme.MuvioChampagne
 import com.example.ui.theme.MuvioChampagneLight
+import com.example.ui.theme.MuvioCrimson
+import com.example.ui.theme.MuvioCrimsonBorder
+import com.example.ui.theme.MuvioCrimsonContainer
+import com.example.ui.theme.MuvioCrimsonGlow
 import com.example.ui.theme.MuvioGlassBorder
 import com.example.ui.theme.MuvioOutline
 import com.example.ui.theme.MuvioSurfaceCard
@@ -62,14 +67,18 @@ import com.example.ui.theme.MuvioTextPrimary
 import com.example.ui.theme.MuvioTextSecondary
 import com.example.ui.viewmodel.MuvioUiState
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     uiState: MuvioUiState,
     seriesList: List<MediaItem>,
     moviesList: List<MediaItem>,
+    continueWatchingItems: List<Pair<MediaItem, Float>> = emptyList(),
     onTopTabClick: (String) -> Unit,
     onSearchActiveChange: (Boolean) -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onSubmitSearch: (String) -> Unit = {},
+    onClearRecentSearches: () -> Unit = {},
     onSearchSourceFilterClick: (ContentSource?) -> Unit = {},
     onRetrySecondarySource: () -> Unit = {},
     onSeriesFilterClick: (String) -> Unit,
@@ -98,10 +107,13 @@ fun HomeScreen(
             selectedSourceFilter = uiState.searchSourceFilter,
             secondarySourceError = uiState.secondarySourceError,
             hotSearches = uiState.hotSearches,
+            recentSearches = uiState.recentSearches,
             suggestions = uiState.searchSuggestions,
             allMedia = uiState.allMedia,
             onBack = { onSearchActiveChange(false) },
             onQueryChange = onSearchQueryChange,
+            onSubmitSearch = onSubmitSearch,
+            onClearRecentSearches = onClearRecentSearches,
             onSelectSourceFilter = onSearchSourceFilterClick,
             onRetrySecondarySource = onRetrySecondarySource,
             onMediaClick = onMediaClick
@@ -116,20 +128,20 @@ fun HomeScreen(
             "Movies" -> uiState.allMedia.filter { it.mediaType == MediaType.MOVIE }
             "Series" -> uiState.allMedia.filter { it.mediaType == MediaType.SERIES || it.mediaType == MediaType.DRAMA }
             "Anime" -> uiState.allMedia.filter { it.mediaType == MediaType.ANIME || "anime" in it.sectionTags }
-            "Bengali" -> uiState.allMedia.filter { it.languageBadge == "Bengali" || "bengali" in it.sectionTags }
+            "Bengali" -> uiState.allMedia.filter { it.languageBadge.equals("Bengali", true) || "bengali" in it.sectionTags }
             else -> uiState.allMedia
-        }.ifEmpty { if (activeTopTab == "18+") emptyList() else uiState.allMedia }
+        }
 
         when (uiState.selectedMood) {
             "Late Night Thriller" -> byTab.filter {
-                it.genre.contains("Thriller", true) || it.genre.contains("Crime", true) || it.genre.contains("Mystery", true)
-            }.ifEmpty { byTab }
+                it.genre.contains("Thriller", true) || it.genre.contains("Crime", true) || it.genre.contains("Mystery", true) || it.genre.contains("Horror", true)
+            }
             "Comfort Drama" -> byTab.filter {
                 it.genre.contains("Romance", true) || it.genre.contains("Drama", true) || it.genre.contains("Comedy", true)
-            }.ifEmpty { byTab }
-            "Anime Marathon" -> byTab.filter { it.mediaType == MediaType.ANIME || "anime" in it.sectionTags }.ifEmpty { byTab }
-            "Bengali Gems" -> byTab.filter { it.languageBadge.equals("Bengali", true) || "bengali" in it.sectionTags }.ifEmpty { byTab }
-            "Action Rush" -> byTab.filter { it.genre.contains("Action", true) || it.genre.contains("Sci-Fi", true) }.ifEmpty { byTab }
+            }
+            "Anime Marathon" -> byTab.filter { it.mediaType == MediaType.ANIME || "anime" in it.sectionTags }
+            "Bengali Gems" -> byTab.filter { it.languageBadge.equals("Bengali", true) || "bengali" in it.sectionTags }
+            "Action Rush" -> byTab.filter { it.genre.contains("Action", true) || it.genre.contains("Sci-Fi", true) || it.genre.contains("Adventure", true) }
             else -> byTab
         }
     }
@@ -161,7 +173,9 @@ fun HomeScreen(
         }.take(9)
     }
 
-    Box(
+    PullToRefreshBox(
+        isRefreshing = uiState.isLoadingHome,
+        onRefresh = onRefreshApi,
         modifier = modifier
             .fillMaxSize()
             .background(MuvioBg)
@@ -192,17 +206,61 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         com.example.ui.components.MuvioWordmark()
-                        Text(
-                            text = if (uiState.isLoadingHome) "Loading Live Cinema..." else "Tap Retry to Sync",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MuvioChampagne
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = if (uiState.isLoadingHome) "Loading Live Cinema..." else "Pull to Refresh",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MuvioChampagne
+                            )
+                            Surface(
+                                color = MuvioSurfaceElevated,
+                                border = BorderStroke(1.dp, MuvioGlassBorder),
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onSearchActiveChange(true) }
+                                    .testTag("fallback_search_button")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Search,
+                                        contentDescription = "Search movies and series",
+                                        tint = MuvioTextPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // Loading / Sync Status Banner (subtle, unobtrusive)
-            if (uiState.isLoadingHome) {
+            // Loading / Quick-Connect / Sync Status Area
+            if (uiState.allMedia.isEmpty()) {
+                val needsKeys = !uiState.isApiKeyConfigured && !uiState.isSecondaryApiConfigured
+                item(key = "home_empty_catalog_state") {
+                    when {
+                        uiState.isLoadingHome -> {
+                            HomeLiveSyncingCard(statusMessage = uiState.apiStatusMessage)
+                        }
+                        needsKeys -> {
+                            HomeSecretsRequiredCard(
+                                onRetrySync = onRefreshApi
+                            )
+                        }
+                        else -> {
+                            HomeConnectionErrorCard(
+                                statusMessage = uiState.apiStatusMessage,
+                                onRetry = onRefreshApi
+                            )
+                        }
+                    }
+                }
+            } else if (uiState.isLoadingHome) {
                 item {
                     LinearProgressIndicator(
                         color = MuvioChampagne,
@@ -234,7 +292,7 @@ fun HomeScreen(
                                 text = uiState.apiStatusMessage,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MuvioTextSecondary,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
@@ -277,17 +335,28 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.height(5.dp))
                             Box(
                                 modifier = Modifier
-                                    .height(2.5.dp)
-                                    .width(if (isSelected) 22.dp else 0.dp)
+                                    .height(3.dp)
+                                    .width(if (isSelected) 26.dp else 0.dp)
                                     .clip(CircleShape)
-                                    .background(MuvioChampagne)
+                                    .background(MuvioCrimsonGlow)
                             )
                         }
                     }
                 }
             }
 
-            // 3. NEW: Tonight's Mood + Surprise Me Cinema Concierge
+            // 2b. Signature Asymmetric Velvet Bento Quick-Launch Hub
+            if (activeTopTab != "18+") {
+                item(key = "home_velvet_bento", contentType = "bento") {
+                    VelvetSpotlightBento(
+                        totalCatalogCount = uiState.allMedia.size,
+                        onSelectCategory = onTopTabClick,
+                        onOpenSearch = { onSearchActiveChange(true) }
+                    )
+                }
+            }
+
+            // 3. Tonight's Mood + Surprise Me Cinema Concierge
             item(key = "home_mood_concierge", contentType = "mood") {
                 NoirMoodConciergeSection(
                     selectedMood = uiState.selectedMood,
@@ -297,6 +366,70 @@ fun HomeScreen(
                     onDismissSurprise = onDismissSurprise,
                     onMediaClick = onMediaClick
                 )
+            }
+
+            // 3b. Continue Watching Rail (appears automatically once the user has watch history)
+            if (continueWatchingItems.isNotEmpty() && activeTopTab != "18+") {
+                item(key = "home_continue_watching", contentType = "continue_watching") {
+                    SectionHeader(
+                        title = "Continue Watching",
+                        eyebrow = "RESUME"
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    NoirContinueWatchingRail(
+                        items = continueWatchingItems,
+                        onMediaClick = onMediaClick
+                    )
+                }
+            }
+
+            // Honest empty-filter state when a tab + mood combination matches 0 loaded titles
+            if (activeTopTab != "18+" &&
+                uiState.allMedia.isNotEmpty() &&
+                filteredAll.isEmpty() &&
+                moviesList.isEmpty() &&
+                seriesList.isEmpty()
+            ) {
+                item(key = "home_empty_filter") {
+                    Surface(
+                        color = MuvioSurfaceCard,
+                        border = BorderStroke(0.9.dp, MuvioGlassBorder),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No titles matched \"${uiState.selectedMood}\" in $activeTopTab",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MuvioTextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = MuvioChampagne,
+                                shape = RoundedCornerShape(18.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable {
+                                        onSelectMood("All")
+                                        onTopTabClick("Trending")
+                                    }
+                                    .testTag("reset_home_filters_btn")
+                            ) {
+                                Text(
+                                    text = "Reset Filters",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF140F05),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // 4. Dedicated 18+ Mature Catalog Grid when "18+" top tab is selected
@@ -408,6 +541,28 @@ fun HomeScreen(
                                 showRank = true,
                                 onClick = { onMediaClick(item) },
                                 modifier = Modifier.width(132.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 7b. Streaming Platforms Rail (Netflix, Hoichoi, ZEE5, Prime Video, Disney+)
+            if (uiState.platforms.isNotEmpty() && activeTopTab != "18+") {
+                item(key = "home_platforms", contentType = "platforms") {
+                    SectionHeader(
+                        title = "Streaming Platforms",
+                        eyebrow = "HUBS"
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(uiState.platforms, key = { "platform_${it.apiName}" }) { brand ->
+                            NoirPlatformTile(
+                                brand = brand,
+                                onClick = { onPlatformClick(brand) }
                             )
                         }
                     }
@@ -625,11 +780,11 @@ private fun NoirFilterChipRow(
         items(options) { option ->
             val isSelected = option == selected
             Surface(
-                color = if (isSelected) MuvioSurfaceElevated else Color.Transparent,
+                color = if (isSelected) MuvioCrimsonContainer else Color.Transparent,
                 shape = RoundedCornerShape(18.dp),
                 border = BorderStroke(
                     0.9.dp,
-                    if (isSelected) MuvioChampagne.copy(alpha = 0.7f) else MuvioOutline.copy(alpha = 0.6f)
+                    if (isSelected) MuvioCrimsonBorder else MuvioOutline.copy(alpha = 0.6f)
                 ),
                 modifier = Modifier
                     .clip(RoundedCornerShape(18.dp))
@@ -641,59 +796,10 @@ private fun NoirFilterChipRow(
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                     ),
-                    color = if (isSelected) MuvioChampagneLight else MuvioTextSecondary,
+                    color = if (isSelected) MuvioCrimsonGlow else MuvioTextSecondary,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun NoirCategoryCard(
-    category: CategoryBannerItem,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(0.8.dp, MuvioGlassBorder),
-        modifier = Modifier
-            .width(136.dp)
-            .height(60.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .testTag("category_banner_${category.id}")
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Image(
-                painter = painterResource(id = category.artworkRes),
-                contentDescription = category.label,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                MuvioBg.copy(alpha = 0.82f),
-                                Color(category.accentHex).copy(alpha = 0.25f)
-                            )
-                        )
-                    )
-            )
-            Text(
-                text = category.label,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.4.sp
-                ),
-                color = MuvioTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 10.dp)
-            )
         }
     }
 }

@@ -36,27 +36,41 @@ data class SecondarySuggestResult(
 )
 
 class SecondaryCatalogApiClient(
-    private val baseUrl: String = BuildConfig.SECONDARY_CATALOG_BASE_URL.trimEnd('/'),
+    private val defaultBaseUrl: String = BuildConfig.SECONDARY_CATALOG_BASE_URL.trimEnd('/'),
     private val apiKeyProvider: () -> String = { BuildConfig.SECONDARY_CATALOG_API_KEY.trim() }
 ) {
-    private val originUrl: String = run {
-        val parsed = baseUrl.toHttpUrlOrNull()
-        if (parsed != null) {
-            val isDefaultPort = (parsed.scheme == "https" && parsed.port == 443) ||
-                (parsed.scheme == "http" && parsed.port == 80)
-            if (isDefaultPort) {
-                "${parsed.scheme}://${parsed.host}"
+    @Volatile
+    var runtimeBaseUrlOverride: String = ""
+
+    @Volatile
+    var runtimeApiKeyOverride: String = ""
+
+    private val baseUrl: String
+        get() = runtimeBaseUrlOverride.trim().trimEnd('/').ifBlank { defaultBaseUrl }
+
+    private val originUrl: String
+        get() {
+            val active = baseUrl
+            val parsed = active.toHttpUrlOrNull()
+            return if (parsed != null) {
+                val isDefaultPort = (parsed.scheme == "https" && parsed.port == 443) ||
+                    (parsed.scheme == "http" && parsed.port == 80)
+                if (isDefaultPort) {
+                    "${parsed.scheme}://${parsed.host}"
+                } else {
+                    "${parsed.scheme}://${parsed.host}:${parsed.port}"
+                }
             } else {
-                "${parsed.scheme}://${parsed.host}:${parsed.port}"
+                active.substringBefore("/api").trimEnd('/')
             }
-        } else {
-            baseUrl.substringBefore("/api").trimEnd('/')
         }
-    }
+
+    private fun effectiveApiKey(): String =
+        runtimeApiKeyOverride.trim().ifBlank { apiKeyProvider().trim() }
 
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()
-        val apiKey = apiKeyProvider().trim()
+        val apiKey = effectiveApiKey()
         val newUrl = if (apiKey.isNotEmpty() && original.url.queryParameter("apiKey").isNullOrBlank()) {
             original.url.newBuilder()
                 .addQueryParameter("apiKey", apiKey)
@@ -78,17 +92,19 @@ class SecondaryCatalogApiClient(
     }
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(35, TimeUnit.SECONDS)
-        .readTimeout(55, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .addInterceptor(authInterceptor)
         .build()
 
     fun isApiKeyConfigured(): Boolean {
-        val key = apiKeyProvider().trim()
-        return key.isNotEmpty() && key != "YOUR_CINEPULSE_API_KEY"
+        val key = effectiveApiKey()
+        return key.isNotEmpty() &&
+            key != "YOUR_CINEPULSE_API_KEY" &&
+            key != "YOUR_SECONDARY_CATALOG_API_KEY"
     }
 
     fun isConfigured(): Boolean = baseUrl.startsWith("http") && isApiKeyConfigured()
@@ -951,7 +967,7 @@ class SecondaryCatalogApiClient(
     }
 
     private fun buildStreamHeaders(resolvedUrl: String, existing: Map<String, String>): Map<String, String> {
-        val apiKey = apiKeyProvider().trim()
+        val apiKey = effectiveApiKey()
         if (apiKey.isEmpty() || !resolvedUrl.startsWith(originUrl, ignoreCase = true)) {
             return existing
         }
@@ -1084,7 +1100,7 @@ class SecondaryCatalogApiClient(
     private fun readPositiveInt(obj: JSONObject, keys: List<String>): Int {
         for (key in keys) {
             if (!obj.has(key) || obj.isNull(key)) continue
-            val value = obj.opt(key)
+            val value = obj.opt(key) ?: continue
             val parsed = when (value) {
                 is Number -> value.toInt()
                 is String -> value.trim().toIntOrNull() ?: 0

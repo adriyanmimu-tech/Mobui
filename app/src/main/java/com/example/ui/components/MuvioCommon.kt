@@ -31,9 +31,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
-import com.example.ui.theme.AutoStories
-import com.example.ui.theme.DownloadForOffline
-import com.example.ui.theme.SlowMotionVideo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -62,38 +59,43 @@ import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.example.R
+import com.example.model.ContentSource
 import com.example.model.MainTab
 import com.example.model.MediaItem
 import com.example.model.PosterArtwork
+import com.example.ui.theme.DownloadForOffline
+import com.example.ui.theme.Explore
 import com.example.ui.theme.MuvioBadgeOverlay
-import com.example.ui.theme.MuvioBg
-import com.example.ui.theme.MuvioBronze
 import com.example.ui.theme.MuvioChampagne
 import com.example.ui.theme.MuvioChampagneLight
+import com.example.ui.theme.MuvioCrimson
+import com.example.ui.theme.MuvioCrimsonBorder
+import com.example.ui.theme.MuvioCrimsonDeep
+import com.example.ui.theme.MuvioCrimsonGlow
 import com.example.ui.theme.MuvioGlass
 import com.example.ui.theme.MuvioGlassBorder
 import com.example.ui.theme.MuvioHotRed
-import com.example.ui.theme.MuvioOutline
 import com.example.ui.theme.MuvioSurfaceCard
 import com.example.ui.theme.MuvioTextMuted
 import com.example.ui.theme.MuvioTextPrimary
 import com.example.ui.theme.MuvioTextSecondary
 import com.example.ui.theme.PlayfairFontFamily
+import com.example.ui.theme.SlowMotionVideo
 
 @Composable
 fun MuvioBrandMark(
     modifier: Modifier = Modifier,
-    size: Dp = 36.dp
+    size: Dp = 38.dp
 ) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MuvioBg,
-        border = BorderStroke(1.dp, MuvioGlassBorder),
-        shadowElevation = 6.dp,
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Black,
+        border = BorderStroke(1.dp, MuvioCrimsonBorder),
+        shadowElevation = 10.dp,
         modifier = modifier.size(size)
     ) {
         Image(
-            painter = painterResource(id = R.drawable.ic_muvio_noir_logo_1795061163701),
+            painter = painterResource(id = R.drawable.ic_muvio_ribbon_logo),
             contentDescription = "Muvio Brand Logo",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -109,34 +111,36 @@ fun MuvioWordmark(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        MuvioBrandMark(size = 34.dp)
+        MuvioBrandMark(size = 36.dp)
         Spacer(modifier = Modifier.width(10.dp))
         Column {
             Text(
                 text = "MUVIO",
                 fontFamily = PlayfairFontFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                letterSpacing = 2.8.sp,
+                fontSize = 19.sp,
+                letterSpacing = 3.0.sp,
                 color = MuvioTextPrimary
             )
             Text(
-                text = "NOIR CINEMA",
+                text = "VELVET CINEMA",
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontSize = 8.sp,
-                    letterSpacing = 1.8.sp
+                    letterSpacing = 2.0.sp,
+                    fontWeight = FontWeight.Bold
                 ),
-                color = MuvioChampagne
+                color = MuvioCrimsonGlow
             )
         }
     }
 }
 
 private val PosterVignetteBrush = Brush.verticalGradient(
-    colors = listOf(
-        Color.Black.copy(alpha = 0.08f),
-        Color.Transparent,
-        Color.Black.copy(alpha = 0.58f)
+    colorStops = arrayOf(
+        0.0f to Color.Black.copy(alpha = 0.14f),
+        0.45f to Color.Transparent,
+        0.82f to Color.Black.copy(alpha = 0.56f),
+        1.0f to Color.Black.copy(alpha = 0.84f)
     )
 )
 
@@ -160,7 +164,7 @@ fun MuvioPosterArtwork(
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .allowRgb565(true)
-                    .crossfade(100)
+                    .crossfade(110)
                     .error(poster.fallbackRes)
                     .build()
             }
@@ -179,7 +183,6 @@ fun MuvioPosterArtwork(
             )
         }
 
-        // Refined Noir cinematic vignette for crisp overlay legibility
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -201,13 +204,22 @@ fun MediaPosterCard(
             .testTag("poster_card_${item.id}")
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(18.dp),
             color = MuvioSurfaceCard,
-            border = BorderStroke(0.6.dp, Color.White.copy(alpha = 0.09f)),
-            shadowElevation = 6.dp,
+            border = BorderStroke(
+                width = 0.8.dp,
+                brush = Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.18f),
+                        Color.White.copy(alpha = 0.04f),
+                        MuvioCrimson.copy(alpha = 0.18f)
+                    )
+                )
+            ),
+            shadowElevation = 8.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.69f)
+                .aspectRatio(0.68f)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 MuvioPosterArtwork(
@@ -216,16 +228,17 @@ fun MediaPosterCard(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Top-left subtle rating pill
+                // Top-left frosted obsidian rating pill
                 Surface(
                     color = MuvioBadgeOverlay,
-                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.6.dp, Color.White.copy(alpha = 0.14f)),
+                    shape = RoundedCornerShape(9.dp),
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(7.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -239,6 +252,7 @@ fun MediaPosterCard(
                             text = item.rating.toString(),
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.sp
                             ),
                             color = MuvioTextPrimary
@@ -246,11 +260,11 @@ fun MediaPosterCard(
                     }
                 }
 
-                // Top-right Language Badge
+                // Top-right Crimson Silk language / quality badge
                 item.languageBadge?.let { badge ->
                     Surface(
-                        color = MuvioChampagne.copy(alpha = 0.92f),
-                        shape = RoundedCornerShape(7.dp),
+                        color = MuvioCrimson.copy(alpha = 0.92f),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(7.dp)
@@ -262,23 +276,45 @@ fun MediaPosterCard(
                                 fontWeight = FontWeight.ExtraBold,
                                 letterSpacing = 0.5.sp
                             ),
-                            color = Color(0xFF140F05),
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 5.5.dp, vertical = 2.5.dp)
                         )
                     }
                 }
 
-                // Asymmetric Editorial Playfair Rank Number
+                // Bottom-right subtle dual-source micro-tag
+                if (item.contentSource == ContentSource.SECONDARY) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.72f),
+                        border = BorderStroke(0.6.dp, MuvioChampagne.copy(alpha = 0.45f)),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                    ) {
+                        Text(
+                            text = "HD",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 7.5.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MuvioChampagneLight,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+
+                // Dramatic Editorial Playfair Rank Numeral
                 if (showRank && item.rankNumber != null) {
                     Text(
                         text = item.rankNumber.toString().padStart(2, '0'),
                         fontFamily = PlayfairFontFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 42.sp,
-                        color = MuvioChampagneLight.copy(alpha = 0.78f),
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 44.sp,
+                        color = MuvioChampagneLight.copy(alpha = 0.88f),
                         modifier = Modifier
                             .align(Alignment.BottomStart)
-                            .padding(start = 8.dp, bottom = 2.dp)
+                            .padding(start = 8.dp, bottom = 0.dp)
                     )
                 }
             }
@@ -289,7 +325,7 @@ fun MediaPosterCard(
         Text(
             text = item.title,
             style = MaterialTheme.typography.titleSmall.copy(
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 13.sp
             ),
             color = MuvioTextPrimary,
@@ -327,15 +363,15 @@ fun SectionHeader(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f)
         ) {
-            // Subtle Champagne Gold vertical editorial hairline
+            // Crimson-to-Champagne vertical silk ribbon bar
             Box(
                 modifier = Modifier
-                    .width(3.dp)
-                    .height(20.dp)
+                    .width(3.5.dp)
+                    .height(24.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(MuvioChampagneLight, MuvioBronze)
+                            colors = listOf(MuvioCrimsonGlow, MuvioCrimson, MuvioChampagne)
                         )
                     )
             )
@@ -346,14 +382,18 @@ fun SectionHeader(
                         text = eyebrow.uppercase(),
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 9.sp,
-                            letterSpacing = 1.4.sp
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.6.sp
                         ),
-                        color = MuvioChampagne
+                        color = MuvioCrimsonGlow
                     )
                 }
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.headlineSmall.copy(fontSize = 20.sp),
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
                     color = MuvioTextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -362,26 +402,32 @@ fun SectionHeader(
         }
 
         if (onSeeAllClick != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                color = MuvioGlass,
+                border = BorderStroke(0.8.dp, MuvioGlassBorder),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .minimumInteractiveComponentSize()
                     .clickable(onClick = onSeeAllClick)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("see_all_${title.lowercase().replace(" ", "_")}")
             ) {
-                Text(
-                    text = stringResource(R.string.see_all),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MuvioChampagne
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                    contentDescription = stringResource(R.string.see_all),
-                    tint = MuvioChampagne,
-                    modifier = Modifier.size(18.dp)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.see_all),
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MuvioChampagneLight
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = stringResource(R.string.see_all),
+                        tint = MuvioCrimsonGlow,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
@@ -394,25 +440,34 @@ fun MuvioBottomBar(
     onSelectTab: (MainTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Noir Atelier Floating Frosted Glass Capsule Dock
+    // Velvet Cinema Floating Smoked-Glass Capsule Dock
     Box(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            color = MuvioGlass,
-            border = BorderStroke(1.dp, MuvioGlassBorder),
-            shape = RoundedCornerShape(32.dp),
-            shadowElevation = 18.dp,
+            color = Color(0xEB0B0D14),
+            border = BorderStroke(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.14f),
+                        MuvioCrimson.copy(alpha = 0.48f),
+                        Color.White.copy(alpha = 0.14f)
+                    )
+                )
+            ),
+            shape = RoundedCornerShape(34.dp),
+            shadowElevation = 22.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(64.dp)
+                    .height(66.dp)
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -430,8 +485,8 @@ fun MuvioBottomBar(
                 CapsuleNavItem(
                     label = stringResource(R.string.nav_novel_hub),
                     selected = selectedTab == MainTab.NOVEL_HUB,
-                    selectedIcon = Icons.Rounded.AutoStories,
-                    unselectedIcon = Icons.Outlined.AutoStories,
+                    selectedIcon = Icons.Rounded.Explore,
+                    unselectedIcon = Icons.Outlined.Explore,
                     onClick = { onSelectTab(MainTab.NOVEL_HUB) },
                     testTag = "nav_novel_hub",
                     modifier = Modifier.weight(1f)
@@ -487,14 +542,14 @@ private fun CapsuleNavItem(
 ) {
     val iconTint by animateColorAsState(
         targetValue = when {
-            selected -> Color(0xFF140F05)
-            isFeaturedCenter -> MuvioChampagne
+            selected -> Color.White
+            isFeaturedCenter -> MuvioCrimsonGlow
             else -> MuvioTextSecondary
         },
         label = "capsuleTint"
     )
     val pillWidth by animateDpAsState(
-        targetValue = if (selected) 52.dp else 40.dp,
+        targetValue = if (selected) 54.dp else 40.dp,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "capsuleWidth"
     )
@@ -502,7 +557,7 @@ private fun CapsuleNavItem(
     Column(
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp)
             .testTag(testTag),
@@ -513,16 +568,18 @@ private fun CapsuleNavItem(
             Box(
                 modifier = Modifier
                     .width(pillWidth)
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .height(33.dp)
+                    .clip(RoundedCornerShape(17.dp))
                     .background(
                         if (selected) {
-                            Brush.horizontalGradient(listOf(MuvioChampagneLight, MuvioChampagne))
+                            Brush.horizontalGradient(
+                                listOf(MuvioCrimsonGlow, MuvioCrimson, MuvioCrimsonDeep)
+                            )
                         } else if (isFeaturedCenter) {
                             Brush.horizontalGradient(
                                 listOf(
-                                    MuvioChampagne.copy(alpha = 0.14f),
-                                    MuvioBronze.copy(alpha = 0.14f)
+                                    MuvioCrimson.copy(alpha = 0.22f),
+                                    MuvioCrimsonDeep.copy(alpha = 0.28f)
                                 )
                             )
                         } else {
@@ -563,7 +620,7 @@ private fun CapsuleNavItem(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 letterSpacing = 0.2.sp
             ),
-            color = if (selected) MuvioChampagne else MuvioTextMuted,
+            color = if (selected) MuvioTextPrimary else MuvioTextMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

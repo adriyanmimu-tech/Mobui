@@ -3,7 +3,7 @@
     <string name="search_hint">Search Movie / Series / Drama</string>
     <string name="search_action">Search</string>
     <string name="nav_home">Home</string>
-    <string name="nav_novel_hub">NovelHub</string>
+    <string name="nav_novel_hub">Explore</string>
     <string name="nav_shorts">Shorts</string>
     <string name="nav_downloads">Downloads</string>
     <string name="nav_me">Me</string>
@@ -27,4 +27,16 @@
     <string name="tab_for_you">For you</string>
     <string name="tab_comments">Comments</string>
     <string name="action_post">Post</string>
+    <string name="home_syncing_title">Syncing Live Cinema…</string>
+    <string name="home_syncing_subtitle">MovieBox &amp; CinePulse সার্ভার কানেক্ট হচ্ছে। প্রথমবার ১৫–৩০ সেকেন্ড সময় লাগতে পারে।</string>
+    <string name="home_secrets_setup_eyebrow">ONE-TIME SETUP</string>
+    <string name="home_secrets_setup_title">AI Studio Secrets-এ একবার কী সেভ করুন</string>
+    <string name="home_secrets_setup_subtitle">অ্যাপের ভেতরে বার বার বসাতে হবে না। AI Studio-এর Secrets প্যানেলে নিচের ২টা নাম দিয়ে কী সেভ করলেই প্রতিবার অটোমেটিক সব মুভি ও সিরিজ লোড হবে:</string>
+    <string name="home_secrets_key_primary">MOVIEBOX_API_KEY</string>
+    <string name="home_secrets_key_secondary">SECONDARY_CATALOG_API_KEY</string>
+    <string name="home_reconnect_title">Could Not Reach Live Servers</string>
+    <string name="home_retry_sync_cta">Retry Live Sync</string>
+    <string name="home_open_remote_config_cta">Remote Config Settings</string>
+    <string name="cd_connect_api_icon">API connection icon</string>
+    <string name="cd_connection_warning_icon">Connection warning icon</string>
 </resources>

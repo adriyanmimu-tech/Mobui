@@ -39,18 +39,32 @@ data class MediaDetailResult(
     val seasonEpisodes: Map<Int, List<EpisodeItem>> = emptyMap()
 )
 
-class MovieBoxApiClient {
+class MovieBoxApiClient(
+    private val apiKeyProvider: () -> String = { BuildConfig.MOVIEBOX_API_KEY.trim() }
+) {
 
-    private val baseUrl: String = BuildConfig.MOVIEBOX_BASE_URL.trimEnd('/')
+    private val defaultBaseUrl: String = BuildConfig.MOVIEBOX_BASE_URL.trimEnd('/')
+
+    @Volatile
+    var runtimeBaseUrlOverride: String = ""
+
+    @Volatile
+    var runtimeApiKeyOverride: String = ""
+
+    private val baseUrl: String
+        get() = runtimeBaseUrlOverride.trim().trimEnd('/').ifBlank { defaultBaseUrl }
+
+    private fun effectiveApiKey(): String =
+        runtimeApiKeyOverride.trim().ifBlank { apiKeyProvider().trim() }
 
     fun isApiKeyConfigured(): Boolean {
-        val key = BuildConfig.MOVIEBOX_API_KEY.trim()
+        val key = effectiveApiKey()
         return key.isNotEmpty() && key != "YOUR_MOVIEBOX_API_KEY"
     }
 
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()
-        val apiKey = BuildConfig.MOVIEBOX_API_KEY.trim()
+        val apiKey = effectiveApiKey()
         val newUrl = original.url.newBuilder()
             .addQueryParameter("apiKey", apiKey)
             .build()
@@ -64,9 +78,9 @@ class MovieBoxApiClient {
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(35, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
-            .writeTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(45, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(authInterceptor)
             .build()
     }
@@ -252,8 +266,21 @@ class MovieBoxApiClient {
     internal fun parseDetailsJson(root: JSONObject, fallbackTitle: String): MediaDetailResult =
         MovieBoxParsers.parseDetailsPayload(root, MovieBoxParsers.unwrapPayload(root), fallbackTitle)
 
-    internal fun parseStreamsJson(root: JSONObject, title: String): List<StreamResource> =
-        MovieBoxParsers.parseStreamsPayload(MovieBoxParsers.unwrapPayload(root), title)
+    internal fun parseStreamsJson(root: JSONObject, title: String): List<StreamResource> {
+        val parsed = MovieBoxParsers.parseStreamsPayload(MovieBoxParsers.unwrapPayload(root), title)
+        val key = effectiveApiKey()
+        val origin = baseUrl.substringBefore("/api").trimEnd('/')
+        if (key.isEmpty() || origin.isBlank()) return parsed
+        return parsed.map { res ->
+            if (res.streamUrl.startsWith(origin, ignoreCase = true) &&
+                res.headers.keys.none { it.equals("X-API-Key", ignoreCase = true) }
+            ) {
+                res.copy(headers = res.headers + ("X-API-Key" to key))
+            } else {
+                res
+            }
+        }
+    }
 
     internal fun parseSportsJson(root: JSONObject): List<LiveMatchItem> =
         MovieBoxParsers.parseSportsPayload(MovieBoxParsers.unwrapPayload(root))
@@ -275,23 +302,38 @@ class MovieBoxApiClient {
         if (!isApiKeyConfigured()) {
             return Result.failure(ApiKeyMissingException())
         }
-        return try {
-            val request = Request.Builder().url(url).get().build()
-            httpClient.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    return Result.failure(IOException("HTTP ${response.code}: ${bodyStr.take(180)}"))
+        var lastError: Throwable? = null
+        repeat(2) { attempt ->
+            try {
+                val request = Request.Builder().url(url).get().build()
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val isRetryable = response.code in listOf(502, 503, 504)
+                        lastError = IOException("HTTP ${response.code}: ${bodyStr.take(180)}")
+                        if (isRetryable && attempt == 0) {
+                            Thread.sleep(700L)
+                            return@repeat
+                        }
+                        return Result.failure(lastError!!)
+                    }
+                    val trimmed = bodyStr.trim()
+                    val json = when {
+                        trimmed.startsWith("{") -> JSONObject(trimmed)
+                        trimmed.startsWith("[") -> JSONObject().put("items", JSONArray(trimmed))
+                        else -> return Result.failure(IOException("Unexpected response format"))
+                    }
+                    return Result.success(json)
                 }
-                val trimmed = bodyStr.trim()
-                val json = when {
-                    trimmed.startsWith("{") -> JSONObject(trimmed)
-                    trimmed.startsWith("[") -> JSONObject().put("items", JSONArray(trimmed))
-                    else -> return Result.failure(IOException("Unexpected response format"))
+            } catch (e: java.net.SocketTimeoutException) {
+                lastError = e
+                if (attempt == 0) {
+                    Thread.sleep(500L)
                 }
-                Result.success(json)
+            } catch (e: Exception) {
+                return Result.failure(e)
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+        return Result.failure(lastError ?: IOException("Request timed out"))
     }
 }

@@ -45,6 +45,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -52,19 +55,21 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.data.MuvioDownloadEngine
+import com.example.data.MuvioPreferencesStore
 import com.example.model.DownloadStatus
 import com.example.model.MainTab
 import com.example.ui.components.MuvioBottomBar
 import com.example.ui.screens.DetailPlayerScreen
 import com.example.ui.screens.DownloadsScreen
+import com.example.ui.screens.ExploreHubScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LiveSportsPlayerOverlay
 import com.example.ui.screens.MeScreen
-import com.example.ui.screens.NovelHubScreen
 import com.example.ui.screens.SeeAllCategoryScreen
 import com.example.ui.screens.ShortsScreen
 import com.example.ui.screens.StaffFilmographySheet
-import com.example.ui.theme.MuvioEmerald
+import com.example.ui.theme.MuvioCrimsonGlow
 import com.example.ui.theme.MuvioSurfaceElevated
 import com.example.ui.theme.MuvioTextPrimary
 import com.example.ui.theme.MuvioTheme
@@ -182,9 +187,21 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MuvioApp(
-    viewModel: MuvioViewModel = viewModel()
-) {
+fun MuvioApp() {
+    val context = LocalContext.current
+    val appContext = context.applicationContext
+    val factory = remember(appContext) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return MuvioViewModel(
+                    preferencesStore = MuvioPreferencesStore(appContext),
+                    downloadEngine = MuvioDownloadEngine(appContext)
+                ) as T
+            }
+        }
+    }
+    val viewModel: MuvioViewModel = viewModel(factory = factory)
     val navController = rememberNavController()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -234,16 +251,34 @@ fun MuvioApp(
                     ) { activeTab ->
                     when (activeTab) {
                         MainTab.HOME -> {
-                            val seriesList = remember(uiState.allMedia, uiState.selectedSeriesFilter) {
+                            val seriesList = remember(
+                                uiState.allMedia,
+                                uiState.selectedSeriesFilter,
+                                uiState.selectedTopTab,
+                                uiState.selectedMood
+                            ) {
                                 viewModel.filteredTrendingSeries()
                             }
-                            val moviesList = remember(uiState.allMedia, uiState.selectedMovieFilter) {
+                            val moviesList = remember(
+                                uiState.allMedia,
+                                uiState.selectedMovieFilter,
+                                uiState.selectedTopTab,
+                                uiState.selectedMood
+                            ) {
                                 viewModel.filteredTrendingMovies()
+                            }
+                            val continueWatching = remember(
+                                uiState.allMedia,
+                                uiState.watchHistoryIds,
+                                uiState.watchProgressByMedia
+                            ) {
+                                viewModel.continueWatchingItems()
                             }
                             HomeScreen(
                                 uiState = uiState,
                                 seriesList = seriesList,
                                 moviesList = moviesList,
+                                continueWatchingItems = continueWatching,
                                 onTopTabClick = { tab ->
                                     if (tab == "18+") {
                                         viewModel.requestAdultAccess()
@@ -254,6 +289,8 @@ fun MuvioApp(
                                 },
                                 onSearchActiveChange = viewModel::setSearchActive,
                                 onSearchQueryChange = viewModel::updateSearchQuery,
+                                onSubmitSearch = viewModel::saveRecentSearch,
+                                onClearRecentSearches = viewModel::clearRecentSearches,
                                 onSearchSourceFilterClick = viewModel::selectSearchSourceFilter,
                                 onRetrySecondarySource = viewModel::retrySecondarySource,
                                 onSeriesFilterClick = viewModel::selectSeriesFilter,
@@ -302,7 +339,34 @@ fun MuvioApp(
                         }
 
                         MainTab.NOVEL_HUB -> {
-                            NovelHubScreen(uiState = uiState)
+                            ExploreHubScreen(
+                                uiState = uiState,
+                                onMediaClick = { item ->
+                                    viewModel.openMediaDetail(item)
+                                    navController.navigate("detail/${Uri.encode(item.id)}")
+                                },
+                                onPlatformClick = { brand ->
+                                    viewModel.openPlatform(brand)
+                                    navController.navigate("category/${Uri.encode(brand.displayName)}")
+                                },
+                                onApiCategoryClick = { cat ->
+                                    val isAdultCat = cat.path.contains("adult", ignoreCase = true) ||
+                                        cat.name.contains("18+", ignoreCase = true)
+                                    if (isAdultCat) {
+                                        if (viewModel.requestAdultAccess(cat)) {
+                                            navController.navigate("category/${Uri.encode(cat.name)}")
+                                        }
+                                    } else {
+                                        viewModel.openCatalogPath(cat.name, cat.path)
+                                        navController.navigate("category/${Uri.encode(cat.name)}")
+                                    }
+                                },
+                                onOpenSearch = {
+                                    viewModel.selectTab(MainTab.HOME)
+                                    viewModel.setSearchActive(true)
+                                },
+                                onRefreshApi = viewModel::refreshHomeFeed
+                            )
                         }
 
                         MainTab.SHORTS -> {
@@ -310,11 +374,12 @@ fun MuvioApp(
                                 uiState = uiState,
                                 onToggleLike = viewModel::toggleShortLike,
                                 onToggleSave = viewModel::toggleShortSave,
-                                onWatchFullSeries = { mediaId ->
-                                    viewModel.getMediaById(mediaId)?.let { viewModel.openMediaDetail(it) }
-                                        ?: viewModel.recordWatchHistory(mediaId)
-                                    navController.navigate("detail/${Uri.encode(mediaId)}")
-                                }
+                                onWatchFullSeries = { reel ->
+                                    val resolvedId = viewModel.openShortReelFullDrama(reel)
+                                    navController.navigate("detail/${Uri.encode(resolvedId)}")
+                                },
+                                onResolveReelStream = viewModel::resolveShortReelStream,
+                                onRetryShorts = viewModel::retryShorts
                             )
                         }
 
@@ -323,13 +388,18 @@ fun MuvioApp(
                                 downloads = uiState.downloads,
                                 onTogglePause = viewModel::toggleDownloadPause,
                                 onRemoveDownload = viewModel::removeDownload,
-                                onOpenMedia = { mediaId ->
-                                    navController.navigate("detail/${Uri.encode(mediaId)}")
+                                onOpenMedia = { downloadId ->
+                                    viewModel.openDownloadedMedia(downloadId)?.let { resolvedMediaId ->
+                                        navController.navigate("detail/${Uri.encode(resolvedMediaId)}")
+                                    }
                                 }
                             )
                         }
 
                         MainTab.ME -> {
+                            LaunchedEffect(Unit) {
+                                viewModel.refreshStorageStats()
+                            }
                             MeScreen(
                                 uiState = uiState,
                                 onMediaClick = { item ->
@@ -339,6 +409,16 @@ fun MuvioApp(
                                 onToggleAutoPlay = viewModel::toggleAutoPlayNext,
                                 onToggleWifiOnly = viewModel::toggleWifiOnlyDownloads,
                                 onCycleQuality = viewModel::cyclePreferredQuality,
+                                onCycleSubtitleSize = {
+                                    val nextSize = when (uiState.subtitleSize) {
+                                        "Small" -> "Medium"
+                                        "Medium" -> "Large"
+                                        else -> "Small"
+                                    }
+                                    viewModel.setSubtitleSize(nextSize)
+                                },
+                                onClearHistory = viewModel::clearWatchHistory,
+                                onClearCache = viewModel::clearAppCache,
                                 onRefreshApi = viewModel::refreshHomeFeed,
                                 onSelectMeSection = viewModel::selectMeSection,
                                 onToggleWatchlist = viewModel::toggleWatchlist
@@ -395,8 +475,13 @@ fun MuvioApp(
                         isInWatchlist = media.id in uiState.watchlistIds,
                         selectedLanguage = selectedLang,
                         selectedEpisode = selectedEp,
+                        initialProgressFraction = uiState.watchProgressByMedia[media.id] ?: 0f,
+                        autoPlayNext = uiState.autoPlayNext,
+                        subtitleSize = uiState.subtitleSize,
+                        onSelectSubtitleSize = viewModel::setSubtitleSize,
                         sleepTimerMinutes = uiState.sleepTimerMinutes,
                         onCycleSleepTimer = viewModel::cycleSleepTimer,
+                        onSleepTimerElapsed = { viewModel.resetSleepTimer(showNotice = true) },
                         onProgressChange = { frac -> viewModel.updateWatchProgress(media.id, frac) },
                         onRetryStream = { viewModel.fetchStreamsForMedia(mediaForDisplay, selectedSeason, selectedEp) },
                         onFallbackToAlternateStream = { viewModel.fallbackToAlternateStream(mediaForDisplay, selectedSeason, selectedEp) },
@@ -470,7 +555,7 @@ fun MuvioApp(
                             }
                         }
                     ) {
-                        Text("I am 18+", color = MuvioEmerald)
+                        Text("I am 18+", color = MuvioCrimsonGlow)
                     }
                 },
                 dismissButton = {
@@ -495,6 +580,14 @@ fun MuvioApp(
             )
         }
 
+        // Native ExoPlayer Live Sports Overlay
+        uiState.activeLiveMatch?.let { match ->
+            LiveSportsPlayerOverlay(
+                match = match,
+                onClose = viewModel::closeLiveMatch
+            )
+        }
+
         val pipController = LocalMuvioPipController.current
         val isInPipMode by pipController?.isInPipMode?.collectAsStateWithLifecycle()
             ?: remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -505,12 +598,12 @@ fun MuvioApp(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = 84.dp, start = 16.dp, end = 16.dp)
+                    .padding(bottom = 86.dp, start = 16.dp, end = 16.dp)
             ) { data ->
                 Snackbar(
                     containerColor = MuvioSurfaceElevated,
                     contentColor = MuvioTextPrimary,
-                    actionColor = MuvioEmerald,
+                    actionColor = MuvioCrimsonGlow,
                     snackbarData = data
                 )
             }

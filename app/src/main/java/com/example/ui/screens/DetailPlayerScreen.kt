@@ -7,6 +7,9 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -47,9 +50,11 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
+import com.example.ui.theme.AspectRatio
 import com.example.ui.theme.Bedtime
 import com.example.ui.theme.Cast
 import com.example.ui.theme.ChatBubbleOutline
@@ -61,10 +66,12 @@ import com.example.ui.theme.Fullscreen
 import com.example.ui.theme.FullscreenExit
 import com.example.ui.theme.HelpOutline
 import com.example.ui.theme.LocalMovies
+import com.example.ui.theme.LockOpen
 import com.example.ui.theme.Pause
 import com.example.ui.theme.PictureInPictureAlt
 import com.example.ui.theme.PlaylistAdd
 import com.example.ui.theme.Replay10
+import com.example.ui.theme.SkipNext
 import com.example.ui.theme.Tune
 import com.example.ui.theme.Tv
 import androidx.compose.material3.AlertDialog
@@ -133,6 +140,7 @@ import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleParser
 import androidx.media3.extractor.text.subrip.SubripParser
 import androidx.media3.extractor.text.webvtt.WebvttParser
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -191,8 +199,13 @@ fun DetailPlayerScreen(
     isInWatchlist: Boolean,
     selectedLanguage: String,
     selectedEpisode: Int,
+    initialProgressFraction: Float = 0f,
+    autoPlayNext: Boolean = true,
+    subtitleSize: String = "Medium",
+    onSelectSubtitleSize: (String) -> Unit = {},
     sleepTimerMinutes: Int = 0,
     onCycleSleepTimer: () -> Unit = {},
+    onSleepTimerElapsed: () -> Unit = {},
     onProgressChange: (Float) -> Unit = {},
     onRetryStream: () -> Unit = {},
     onFallbackToAlternateStream: () -> Unit = {},
@@ -220,6 +233,7 @@ fun DetailPlayerScreen(
     val subtitleScope = rememberCoroutineScope()
 
     var isFullscreen by remember { mutableStateOf(false) }
+    var isPlayerLocked by remember { mutableStateOf(false) }
     var isTheaterDim by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(true) }
     var progressFraction by remember { mutableFloatStateOf(0f) }
@@ -237,6 +251,7 @@ fun DetailPlayerScreen(
 
     // Universal Bengali subtitle translation state (per episode)
     val episodeKey = "${media.id}_s${selectedSeason}_e${selectedEpisode}"
+    var userDisabledSub by remember(episodeKey) { mutableStateOf(false) }
     var generatedBengaliTrack by remember(episodeKey) { mutableStateOf<SubtitleTrack?>(null) }
     var isTranslatingBengali by remember(episodeKey) { mutableStateOf(false) }
     var bengaliTranslateProgress by remember(episodeKey) { mutableFloatStateOf(0f) }
@@ -308,11 +323,11 @@ fun DetailPlayerScreen(
     }
 
     // Automatically select native Bengali subtitle if MovieBox/Source 2 already provides one,
-    // otherwise default to the first available subtitle track.
+    // while strictly respecting if the user explicitly selected "Off".
     LaunchedEffect(episodeKey, activeSubtitles.size) {
         if (activeSubtitles.isEmpty()) {
             selectedSubIndex = -1
-        } else {
+        } else if (!userDisabledSub) {
             val bnIdx = activeSubtitles.indexOfFirst { BengaliSubtitleService.isBengaliTrack(it) }
             if (bnIdx >= 0 && (selectedSubIndex == -1 || selectedSubIndex >= activeSubtitles.size)) {
                 selectedSubIndex = bnIdx
@@ -322,31 +337,51 @@ fun DetailPlayerScreen(
         }
     }
 
-    // Handle hardware back cleanly when in fullscreen
-    BackHandler {
+    // Apply true immersive mode (hide status & nav bars) in fullscreen and restore cleanly
+    LaunchedEffect(isFullscreen, activity) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (isFullscreen) {
-            isFullscreen = false
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            onBack()
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
-    // Restore orientation, window brightness, and PiP registration when leaving screen
+    // Handle hardware back cleanly when locked or in fullscreen
+    BackHandler {
+        when {
+            isPlayerLocked -> {
+                subtitleStatusBanner = "Screen Locked • Tap Unlock icon"
+            }
+            isFullscreen -> {
+                isFullscreen = false
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+            else -> onBack()
+        }
+    }
+
+    // Restore orientation, system bars, window brightness, and PiP registration when leaving screen
     DisposableEffect(Unit) {
         onDispose {
             bengaliJob?.cancel()
             resetWindowBrightness(activity)
             pipController?.unbindPlayer()
+            activity?.window?.let { win ->
+                WindowCompat.getInsetsController(win, win.decorView).show(WindowInsetsCompat.Type.systemBars())
+            }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
-    // Real Sleep Timer countdown that automatically pauses playback
+    // Real Sleep Timer countdown that pauses playback AND resets timer cleanly
     LaunchedEffect(sleepTimerMinutes, isPlaying) {
         if (sleepTimerMinutes > 0 && isPlaying) {
             delay(sleepTimerMinutes * 60_000L)
             isPlaying = false
+            onSleepTimerElapsed()
         }
     }
 
@@ -356,6 +391,9 @@ fun DetailPlayerScreen(
             .background(if (isTheaterDim || isInPipMode) Color.Black else MuvioBg)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            val hasNextEpisode = remember(media.episodes, selectedEpisode) {
+                media.episodes.any { it.number == selectedEpisode + 1 }
+            }
             // 1. Top 16:9 (or Fullscreen / PiP) Video Player Stage
             PlayerStage(
                 media = media,
@@ -372,10 +410,14 @@ fun DetailPlayerScreen(
                 activeQualityLabel = activeQualityLabel,
                 playbackSpeed = playbackSpeed,
                 selectedSubIndex = selectedSubIndex,
+                subtitleSize = subtitleSize,
                 isPlaying = isPlaying,
                 isFullscreen = isFullscreen,
+                isLocked = isPlayerLocked,
+                hasNextEpisode = hasNextEpisode,
                 isInPipMode = isInPipMode,
-                showControls = showControls && !isInPipMode,
+                showControls = showControls && !isInPipMode && !isPlayerLocked,
+                initialProgressFraction = initialProgressFraction,
                 simulatedProgressFraction = progressFraction,
                 streamCount = availableResources.size,
                 selectedStreamIndex = selectedStreamIndex,
@@ -383,12 +425,40 @@ fun DetailPlayerScreen(
                 onFallbackToAlternateStream = onFallbackToAlternateStream,
                 onRetryStream = onRetryStream,
                 onSelectSpeed = { playbackSpeed = it },
-                onSelectSubtitle = { selectedSubIndex = it },
-                onRequestBengaliSubtitle = requestBengaliSubtitle,
+                onSelectSubtitle = { idx ->
+                    userDisabledSub = idx < 0
+                    selectedSubIndex = idx
+                },
+                onRequestBengaliSubtitle = {
+                    userDisabledSub = false
+                    requestBengaliSubtitle()
+                },
                 onOpenQualitySheet = { showQualitySheet = true },
                 onToggleControls = { showControls = !showControls },
                 onAutoHideControls = { showControls = false },
                 onTogglePlay = { isPlaying = !isPlaying },
+                onToggleLock = {
+                    isPlayerLocked = !isPlayerLocked
+                    showControls = !isPlayerLocked
+                },
+                onNextEpisode = {
+                    val nextEp = media.episodes.firstOrNull { it.number == selectedEpisode + 1 }
+                    if (nextEp != null) {
+                        onSelectEpisode(nextEp.number)
+                        isPlaying = true
+                        progressFraction = 0f
+                        subtitleStatusBanner = "Playing Episode ${nextEp.number}"
+                    }
+                },
+                onPlaybackEnded = {
+                    if (autoPlayNext) {
+                        val nextEp = media.episodes.firstOrNull { it.number == selectedEpisode + 1 }
+                        if (nextEp != null) {
+                            onSelectEpisode(nextEp.number)
+                            subtitleStatusBanner = "Playing Episode ${nextEp.number}..."
+                        }
+                    }
+                },
                 onEnterPip = {
                     val entered = pipController?.enterPip() == true
                     if (!entered) {
@@ -415,8 +485,7 @@ fun DetailPlayerScreen(
                         ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                     }
                 },
-                onHelpClick = { showHelpDialog = true },
-                onCastClick = { showHelpDialog = true }
+                onHelpClick = { showHelpDialog = true }
             )
 
             // 2. Scrollable Detail, Episodes, Cast & Comments Body (hidden in Fullscreen & PiP)
@@ -754,6 +823,10 @@ fun DetailPlayerScreen(
                             CommentRow(
                                 comment = comment,
                                 onToggleLike = { onToggleCommentLike(comment.id) },
+                                onReplyClick = {
+                                    commentDraft = "@${comment.author} "
+                                    showCommentSheet = true
+                                },
                                 onDownloadClick = { showDownloadSheet = true }
                             )
                             HorizontalDivider(
@@ -796,6 +869,7 @@ fun DetailPlayerScreen(
             selectedLanguage = selectedLanguage,
             subtitles = activeSubtitles,
             selectedSubIndex = selectedSubIndex,
+            subtitleSize = subtitleSize,
             playbackSpeed = playbackSpeed,
             isLoadingStream = isLoadingStream,
             hasBengaliTrack = hasBengaliTrack,
@@ -811,6 +885,7 @@ fun DetailPlayerScreen(
                 onSelectLanguage(dub.language)
             },
             onSelectSubtitle = { selectedSubIndex = it },
+            onSelectSubtitleSize = onSelectSubtitleSize,
             onRequestBengaliSubtitle = {
                 requestBengaliSubtitle()
                 showQualitySheet = false
@@ -847,6 +922,7 @@ fun DetailPlayerScreen(
                 showAllEpisodesSheet = false
                 showDownloadSheet = true
             },
+            onLoadMoreEpisodes = onLoadMoreEpisodes,
             onDismiss = { showAllEpisodesSheet = false }
         )
     }
@@ -961,11 +1037,16 @@ fun DetailPlayerScreen(
             onDismissRequest = { showHelpDialog = false },
             containerColor = MuvioSurfaceElevated,
             title = {
-                Text("Muvio Stream Ready", color = MuvioTextPrimary)
+                Text("Player Controls & Tips", color = MuvioTextPrimary)
             },
             text = {
                 Text(
-                    "Player UI & Jetpack Media3 ExoPlayer are wired and ready. Connect your API stream URLs next to stream live HLS/MP4 videos and cast to TV.",
+                    "• Swipe up/down on left side for Brightness, right side for Volume.\n" +
+                        "• Double-tap left or right to seek ±10 seconds.\n" +
+                        "• Tap Lock to prevent accidental touches while watching.\n" +
+                        "• Tap Aspect Ratio icon to cycle Fit, Zoom, or Fill.\n" +
+                        "• Tap Quality pill to change resolution, speed, or Subtitle Size.\n" +
+                        "• Tap CC for native or Auto-Translated Bengali subtitles.",
                     color = MuvioTextSecondary
                 )
             },
@@ -1003,10 +1084,14 @@ private fun PlayerStage(
     activeQualityLabel: String,
     playbackSpeed: Float,
     selectedSubIndex: Int,
+    subtitleSize: String,
     isPlaying: Boolean,
     isFullscreen: Boolean,
+    isLocked: Boolean,
+    hasNextEpisode: Boolean,
     isInPipMode: Boolean,
     showControls: Boolean,
+    initialProgressFraction: Float,
     simulatedProgressFraction: Float,
     streamCount: Int,
     selectedStreamIndex: Int,
@@ -1020,6 +1105,9 @@ private fun PlayerStage(
     onToggleControls: () -> Unit,
     onAutoHideControls: () -> Unit,
     onTogglePlay: () -> Unit,
+    onToggleLock: () -> Unit,
+    onNextEpisode: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onEnterPip: () -> Unit,
     onProgressReport: (Float) -> Unit,
     onSimulatedSeekFraction: (Float) -> Unit,
@@ -1027,26 +1115,34 @@ private fun PlayerStage(
     onSimulatedForward10: () -> Unit,
     onBackClick: () -> Unit,
     onToggleFullscreen: () -> Unit,
-    onHelpClick: () -> Unit,
-    onCastClick: () -> Unit
+    onHelpClick: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val pipController = LocalMuvioPipController.current
     var showSubMenu by remember { mutableStateOf(false) }
+    var showUnlockPill by remember { mutableStateOf(false) }
+    var resizeModeIndex by remember { mutableIntStateOf(0) } // 0=Fit, 1=Zoom, 2=Fill
+    var resizePillLabel by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(false) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var retryCounter by remember { mutableIntStateOf(0) }
     var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
     var lastLoadedEpisodeKey by remember { mutableStateOf(episodeKey) }
+    var lastKnownPositionMs by remember(episodeKey) { mutableStateOf(0L) }
+    var appliedInitialResumeForEpisode by remember { mutableStateOf<String?>(null) }
     var playerBoundsRect by remember { mutableStateOf<Rect?>(null) }
     var alternateFallbackTriedEpisode by remember { mutableStateOf<String?>(null) }
+    val triedStreamIndices = remember(episodeKey, streamCount) { mutableSetOf<Int>() }
     val currentStreamCount by rememberUpdatedState(streamCount)
     val currentSelectedStreamIndex by rememberUpdatedState(selectedStreamIndex)
     val currentEpisodeKey by rememberUpdatedState(episodeKey)
+    val currentIsPlaying by rememberUpdatedState(isPlaying)
+    val currentInitialProgress by rememberUpdatedState(initialProgressFraction)
     val currentOnSelectStreamIndex by rememberUpdatedState(onSelectStreamIndex)
     val currentOnFallbackToAlternateStream by rememberUpdatedState(onFallbackToAlternateStream)
+    val currentOnPlaybackEnded by rememberUpdatedState(onPlaybackEnded)
 
     // Smooth vertical swipe gesture state for left=Brightness, right=Volume
     var gestureHudState by remember { mutableStateOf<PlayerGestureHudState?>(null) }
@@ -1092,14 +1188,19 @@ private fun PlayerStage(
         playbackError = null
         isBuffering = true
         val sameEpisode = lastLoadedEpisodeKey == episodeKey
-        val resumeMs = if (sameEpisode && player.currentPosition > 2_000L) player.currentPosition else 0L
+        val livePos = player.currentPosition.takeIf { it > 2_000L } ?: 0L
+        val resumeMs = if (sameEpisode) maxOf(livePos, lastKnownPositionMs) else 0L
+        if (!sameEpisode) lastKnownPositionMs = 0L
         lastLoadedEpisodeKey = episodeKey
 
         val builder = ExoMediaItem.Builder().setUri(streamUrl)
-        val isHlsStream = streamUrl.contains(".m3u8", ignoreCase = true) ||
-            streamUrl.contains("m3u8", ignoreCase = true) ||
-            streamUrl.contains("/api/hls/", ignoreCase = true) ||
-            activeQualityLabel.contains("HLS", ignoreCase = true)
+        val isDirectMp4 = streamUrl.contains(".mp4", ignoreCase = true) && !streamUrl.contains(".m3u8", ignoreCase = true)
+        val isHlsStream = !isDirectMp4 && (
+            streamUrl.contains(".m3u8", ignoreCase = true) ||
+                streamUrl.contains("m3u8", ignoreCase = true) ||
+                streamUrl.contains("/api/hls/", ignoreCase = true) ||
+                activeQualityLabel.contains("HLS", ignoreCase = true)
+            )
         if (isHlsStream) {
             builder.setMimeType(MimeTypes.APPLICATION_M3U8)
         }
@@ -1120,13 +1221,15 @@ private fun PlayerStage(
 
     DisposableEffect(exoPlayer) {
         fun tryNextStreamOrBackup(fallbackErrorMessage: String) {
-            val nextIdx = currentSelectedStreamIndex + 1
-            if (nextIdx < currentStreamCount) {
+            triedStreamIndices.add(currentSelectedStreamIndex)
+            val nextIdx = (0 until currentStreamCount).firstOrNull { it !in triedStreamIndices }
+            if (nextIdx != null) {
                 playbackError = null
                 isBuffering = true
                 currentOnSelectStreamIndex(nextIdx)
             } else if (alternateFallbackTriedEpisode != currentEpisodeKey) {
                 alternateFallbackTriedEpisode = currentEpisodeKey
+                triedStreamIndices.clear()
                 playbackError = null
                 isBuffering = true
                 currentOnFallbackToAlternateStream()
@@ -1141,11 +1244,24 @@ private fun PlayerStage(
                 isBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
-                } else if (playbackState == Player.STATE_ENDED &&
-                    (exoPlayer?.duration ?: C.TIME_UNSET) <= 0L &&
-                    playbackError == null
-                ) {
-                    tryNextStreamOrBackup("ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন")
+                    val player = exoPlayer
+                    val savedFrac = currentInitialProgress
+                    if (player != null &&
+                        appliedInitialResumeForEpisode != currentEpisodeKey &&
+                        savedFrac in 0.03f..0.95f &&
+                        player.currentPosition < 2_000L &&
+                        player.duration > 30_000L
+                    ) {
+                        appliedInitialResumeForEpisode = currentEpisodeKey
+                        player.seekTo((player.duration * savedFrac).toLong())
+                    }
+                } else if (playbackState == Player.STATE_ENDED) {
+                    val dur = exoPlayer?.duration ?: C.TIME_UNSET
+                    if (dur <= 0L && playbackError == null) {
+                        tryNextStreamOrBackup("ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন")
+                    } else if (dur > 0L) {
+                        currentOnPlaybackEnded()
+                    }
                 }
             }
 
@@ -1167,8 +1283,8 @@ private fun PlayerStage(
         }
     }
 
-    // PiP-aware lifecycle handling: keep playing smoothly during Picture-in-Picture (ON_PAUSE),
-    // and pause cleanly when Activity truly stops (PiP dismissed or backgrounded without PiP).
+    // PiP-aware lifecycle handling using up-to-date playback state so manually paused videos
+    // never unexpectedly resume when returning from background.
     DisposableEffect(lifecycleOwner, exoPlayer, activity) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -1181,7 +1297,7 @@ private fun PlayerStage(
                 }
                 Lifecycle.Event.ON_STOP -> exoPlayer?.pause()
                 Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                    if (isPlaying) exoPlayer?.play()
+                    if (currentIsPlaying) exoPlayer?.play()
                 }
                 else -> Unit
             }
@@ -1227,14 +1343,36 @@ private fun PlayerStage(
         }
     }
 
+    // Auto-hide Unlock pill after 2.5 seconds
+    LaunchedEffect(showUnlockPill, isLocked) {
+        if (isLocked && showUnlockPill) {
+            delay(2_500L)
+            showUnlockPill = false
+        } else if (!isLocked) {
+            showUnlockPill = false
+        }
+    }
+
+    // Auto-hide Aspect Ratio pill quickly
+    LaunchedEffect(resizePillLabel) {
+        if (resizePillLabel != null) {
+            delay(1_100L)
+            resizePillLabel = null
+        }
+    }
+
     // Gentle low-overhead watch progress sync every 5 seconds without triggering UI recomposition
     LaunchedEffect(exoPlayer, isPlaying) {
         val player = exoPlayer ?: return@LaunchedEffect
         while (isPlaying) {
             delay(5_000L)
+            val pos = player.currentPosition
+            if (pos > 2_000L) {
+                lastKnownPositionMs = pos
+            }
             val dur = player.duration
             if (dur > 0L) {
-                val frac = (player.currentPosition.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
+                val frac = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
                 onProgressReport(frac)
             }
         }
@@ -1269,11 +1407,21 @@ private fun PlayerStage(
                     }
                 }
             }
-            .pointerInput(exoPlayer, isInPipMode) {
+            .pointerInput(exoPlayer, isInPipMode, isLocked) {
                 if (isInPipMode) return@pointerInput
                 detectTapGestures(
-                    onTap = { onToggleControls() },
+                    onTap = {
+                        if (isLocked) {
+                            showUnlockPill = !showUnlockPill
+                        } else {
+                            onToggleControls()
+                        }
+                    },
                     onDoubleTap = { offset ->
+                        if (isLocked) {
+                            showUnlockPill = true
+                            return@detectTapGestures
+                        }
                         val isLeft = offset.x < size.width / 2f
                         if (exoPlayer != null) {
                             if (isLeft) {
@@ -1295,8 +1443,8 @@ private fun PlayerStage(
                     }
                 )
             }
-            .pointerInput(activity, isInPipMode) {
-                if (isInPipMode) return@pointerInput
+            .pointerInput(activity, isInPipMode, isLocked) {
+                if (isInPipMode || isLocked) return@pointerInput
                 var activeType = PlayerGestureType.VOLUME
                 var activeLevel = 0.5f
                 detectVerticalDragGestures(
@@ -1330,19 +1478,32 @@ private fun PlayerStage(
             }
             .testTag("video_player_stage")
     ) {
+        val subtitleFraction = remember(subtitleSize) {
+            when (subtitleSize.lowercase()) {
+                "small" -> 0.044f
+                "large" -> 0.072f
+                else -> 0.056f
+            }
+        }
+        val activeResizeMode = when (resizeModeIndex) {
+            1 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            2 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
         if (exoPlayer != null) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = false
+                        resizeMode = activeResizeMode
                         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                         setShutterBackgroundColor(android.graphics.Color.BLACK)
                         keepScreenOn = isPlaying
                         subtitleView?.apply {
                             setApplyEmbeddedStyles(false)
                             setApplyEmbeddedFontSizes(false)
-                            setFractionalTextSize(0.056f)
+                            setFractionalTextSize(subtitleFraction)
                             setBottomPaddingFraction(0.06f)
                             setStyle(
                                 CaptionStyleCompat(
@@ -1361,6 +1522,10 @@ private fun PlayerStage(
                     if (view.player !== exoPlayer) {
                         view.player = exoPlayer
                     }
+                    if (view.resizeMode != activeResizeMode) {
+                        view.resizeMode = activeResizeMode
+                    }
+                    view.subtitleView?.setFractionalTextSize(subtitleFraction)
                     view.keepScreenOn = isPlaying
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1458,7 +1623,7 @@ private fun PlayerStage(
         }
 
         AnimatedVisibility(
-            visible = !isInPipMode && doubleTapFeedback != null,
+            visible = !isInPipMode && (doubleTapFeedback != null || resizePillLabel != null),
             enter = fadeIn(tween(100)),
             exit = fadeOut(tween(180)),
             modifier = Modifier.align(Alignment.Center)
@@ -1469,11 +1634,49 @@ private fun PlayerStage(
                 border = BorderStroke(0.8.dp, MuvioGlassBorder)
             ) {
                 Text(
-                    text = doubleTapFeedback.orEmpty(),
+                    text = doubleTapFeedback ?: resizePillLabel.orEmpty(),
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = MuvioChampagneLight,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+        }
+
+        // Floating Unlock Pill when Screen Lock is active
+        AnimatedVisibility(
+            visible = isLocked && showUnlockPill && !isInPipMode,
+            enter = fadeIn(tween(140)),
+            exit = fadeOut(tween(200)),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 16.dp)
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.82f),
+                border = BorderStroke(1.dp, MuvioChampagne),
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(22.dp))
+                    .clickable(onClick = onToggleLock)
+                    .testTag("player_unlock_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.LockOpen,
+                        contentDescription = "Unlock screen",
+                        tint = MuvioChampagne,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Unlock",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MuvioChampagneLight
+                    )
+                }
             }
         }
 
@@ -1657,27 +1860,31 @@ private fun PlayerStage(
                             }
                         }
 
-                        IconButton(onClick = onCastClick) {
+                        IconButton(
+                            onClick = onToggleLock,
+                            modifier = Modifier.testTag("player_lock_button")
+                        ) {
                             Icon(
-                                imageVector = Icons.Rounded.Cast,
-                                contentDescription = "TV Cast",
+                                imageVector = Icons.Rounded.Lock,
+                                contentDescription = "Lock screen",
                                 tint = Color.White
                             )
                         }
+
                         IconButton(onClick = onHelpClick) {
                             Icon(
                                 imageVector = Icons.Outlined.HelpOutline,
-                                contentDescription = "Help",
+                                contentDescription = "Playback tips",
                                 tint = Color.White
                             )
                         }
                     }
                 }
 
-                // Center Playback Controls (Rewind 10, Play/Pause, Forward 10)
+                // Center Playback Controls (Rewind 10, Play/Pause, Forward 10, Optional Next Episode)
                 Row(
                     modifier = Modifier.align(Alignment.Center),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
@@ -1722,6 +1929,20 @@ private fun PlayerStage(
                             modifier = Modifier.size(30.dp)
                         )
                     }
+
+                    if (hasNextEpisode) {
+                        IconButton(
+                            onClick = onNextEpisode,
+                            modifier = Modifier.testTag("player_next_episode")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipNext,
+                                contentDescription = "Next Episode",
+                                tint = MuvioChampagneLight,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
                 }
 
                 // Isolated Bottom Scrub Bar — only this small composable recomposes while controls are visible
@@ -1732,6 +1953,14 @@ private fun PlayerStage(
                     simulatedProgressFraction = simulatedProgressFraction,
                     onTogglePlay = onTogglePlay,
                     onSimulatedSeekFraction = onSimulatedSeekFraction,
+                    onCycleAspectRatio = {
+                        resizeModeIndex = (resizeModeIndex + 1) % 3
+                        resizePillLabel = when (resizeModeIndex) {
+                            1 -> "Aspect: Zoom"
+                            2 -> "Aspect: Fill"
+                            else -> "Aspect: Fit"
+                        }
+                    },
                     onEnterPip = onEnterPip,
                     onToggleFullscreen = onToggleFullscreen,
                     modifier = Modifier
@@ -1752,6 +1981,7 @@ private fun PlayerBottomScrubBar(
     simulatedProgressFraction: Float,
     onTogglePlay: () -> Unit,
     onSimulatedSeekFraction: (Float) -> Unit,
+    onCycleAspectRatio: () -> Unit,
     onEnterPip: () -> Unit,
     onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier
@@ -1841,6 +2071,20 @@ private fun PlayerBottomScrubBar(
             color = Color.White,
             modifier = Modifier.padding(horizontal = 6.dp)
         )
+
+        IconButton(
+            onClick = onCycleAspectRatio,
+            modifier = Modifier
+                .size(32.dp)
+                .testTag("player_aspect_button")
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.AspectRatio,
+                contentDescription = "Aspect ratio",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp)
+            )
+        }
 
         IconButton(
             onClick = onEnterPip,
@@ -2032,6 +2276,7 @@ private fun DetailTabItem(
 private fun CommentRow(
     comment: CommentItem,
     onToggleLike: () -> Unit,
+    onReplyClick: () -> Unit,
     onDownloadClick: () -> Unit
 ) {
     Row(
@@ -2135,28 +2380,49 @@ private fun CommentRow(
                         }
                     }
                 } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onReplyClick)
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .testTag("comment_reply_${comment.id}")
+                    ) {
                         Icon(
                             imageVector = Icons.Outlined.ChatBubbleOutline,
-                            contentDescription = "Replies",
+                            contentDescription = "Reply to ${comment.author}",
                             tint = MuvioTextSecondary,
                             modifier = Modifier.size(17.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = comment.repliesCount.toString(),
+                            text = if (comment.repliesCount > 0) comment.repliesCount.toString() else "Reply",
                             style = MaterialTheme.typography.bodySmall,
                             color = MuvioTextSecondary
                         )
                     }
                 }
 
-                Icon(
-                    imageVector = Icons.Rounded.Share,
-                    contentDescription = "Share comment",
-                    tint = MuvioTextSecondary,
-                    modifier = Modifier.size(17.dp)
-                )
+                val shareContext = LocalContext.current
+                IconButton(
+                    onClick = {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, "${comment.author}: \"${comment.content}\" — via Muvio")
+                        }
+                        runCatching {
+                            shareContext.startActivity(Intent.createChooser(shareIntent, "Share comment"))
+                        }
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = "Share comment",
+                        tint = MuvioTextSecondary,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
             }
         }
     }

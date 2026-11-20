@@ -303,7 +303,7 @@ object BengaliSubtitleService {
         if (current.isNotEmpty()) chunks += current
 
         val results = arrayOfNulls<SubtitleCue>(cues.size)
-        val semaphore = Semaphore(4)
+        val semaphore = Semaphore(2)
         var completedChunks = 0
         val totalChunks = chunks.size.coerceAtLeast(1)
 
@@ -371,38 +371,54 @@ object BengaliSubtitleService {
     }
 
     private fun requestBengaliTranslation(text: String): String? {
-        return runCatching {
-            val formBody = FormBody.Builder()
-                .add("client", "gtx")
-                .add("sl", "auto")
-                .add("tl", "bn")
-                .add("dt", "t")
-                .add("q", text)
-                .build()
+        repeat(3) { attempt ->
+            val result = runCatching {
+                val formBody = FormBody.Builder()
+                    .add("client", "gtx")
+                    .add("sl", "auto")
+                    .add("tl", "bn")
+                    .add("dt", "t")
+                    .add("q", text)
+                    .build()
 
-            val request = Request.Builder()
-                .url("https://translate.googleapis.com/translate_a/single")
-                .header("User-Agent", CHROME_UA)
-                .post(formBody)
-                .build()
+                val request = Request.Builder()
+                    .url("https://translate.googleapis.com/translate_a/single")
+                    .header("User-Agent", CHROME_UA)
+                    .post(formBody)
+                    .build()
 
-            httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return@runCatching null
-                val body = resp.body?.string().orEmpty()
-                if (body.isBlank()) return@runCatching null
-                val root = JSONArray(body)
-                val sentences = root.optJSONArray(0) ?: return@runCatching null
-                buildString {
-                    for (i in 0 until sentences.length()) {
-                        val seg = sentences.optJSONArray(i) ?: continue
-                        val part = seg.optString(0)
-                        if (part.isNotEmpty() && part != "null") {
-                            append(part)
+                httpClient.newCall(request).execute().use { resp ->
+                    if (resp.code == 429 || resp.code in 500..599) {
+                        return@runCatching "__RETRY__"
+                    }
+                    if (!resp.isSuccessful) return@runCatching null
+                    val body = resp.body?.string().orEmpty()
+                    if (body.isBlank()) return@runCatching null
+                    val root = JSONArray(body)
+                    val sentences = root.optJSONArray(0) ?: return@runCatching null
+                    buildString {
+                        for (i in 0 until sentences.length()) {
+                            val seg = sentences.optJSONArray(i) ?: continue
+                            val part = seg.optString(0)
+                            if (part.isNotEmpty() && part != "null") {
+                                append(part)
+                            }
                         }
                     }
                 }
+            }.getOrNull()
+
+            if (result == "__RETRY__") {
+                if (attempt < 2) {
+                    runCatching { Thread.sleep(600L * (attempt + 1)) }
+                }
+            } else if (result != null) {
+                return result
+            } else if (attempt < 2) {
+                runCatching { Thread.sleep(400L * (attempt + 1)) }
             }
-        }.getOrNull()
+        }
+        return null
     }
 
     fun buildWebVtt(cues: List<SubtitleCue>): String {

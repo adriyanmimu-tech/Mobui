@@ -570,5 +570,46 @@ class MuvioApiAndViewModelTest {
         assertTrue(vtt.startsWith("WEBVTT"))
         assertTrue(vtt.contains("00:00:01.500 --> 00:00:04.250"))
     }
+
+    @Test
+    fun viewModel_preferredQualityLanguageSwitchSleepResetAndShortsResolver_workCorrectly() {
+        val vm = MuvioViewModel()
+        val streams = listOf(
+            com.example.model.StreamResource("s1", "Movie 720p", "English", "720p", "Host", "https://cdn.example.com/720.mp4"),
+            com.example.model.StreamResource("s2", "Movie 1080p", "Hindi dub", "1080p", "Host", "https://cdn.example.com/1080.mp4"),
+            com.example.model.StreamResource("s3", "Movie 4K", "Bengali", "4K", "Host", "https://cdn.example.com/4k.mp4")
+        )
+        assertEquals(1, vm.choosePreferredStreamIndex(streams, "1080p HD"))
+        assertEquals(2, vm.choosePreferredStreamIndex(streams, "4K HDR"))
+        assertEquals(0, vm.choosePreferredStreamIndex(streams, "720p HD"))
+
+        vm.cycleSleepTimer()
+        assertEquals(15, vm.uiState.value.sleepTimerMinutes)
+        vm.resetSleepTimer(showNotice = false)
+        assertEquals(0, vm.uiState.value.sleepTimerMinutes)
+
+        val reel = com.example.model.ShortReelItem(
+            id = "r1",
+            linkedMediaId = "unseen_short_42",
+            title = "Secret Billionaire",
+            episodeTag = "EP 1",
+            description = "Micro drama",
+            likesCount = 1200,
+            commentsCount = 45,
+            poster = com.example.model.PosterArtwork(
+                fallbackRes = R.drawable.img_poster_drama,
+                tintHex = 0xFF1A1A24,
+                accentHex = 0xFFD4AF37
+            ),
+            streamUrl = "https://cdn.example.com/short42.mp4"
+        )
+        val resolvedId = vm.openShortReelFullDrama(reel)
+        assertEquals("unseen_short_42", resolvedId)
+        assertEquals("Secret Billionaire", vm.getMediaById(resolvedId)?.title)
+
+        // Language switch updates stream index when matching language exists in resources
+        vm.selectLanguage(resolvedId, "Original")
+        assertEquals(0, vm.uiState.value.selectedStreamIndexByMedia[resolvedId])
+    }
 }
 

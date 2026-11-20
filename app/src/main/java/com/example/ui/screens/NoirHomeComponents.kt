@@ -35,6 +35,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
@@ -43,9 +45,11 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.ui.text.input.ImeAction
 import com.example.ui.theme.AutoAwesome
 import com.example.ui.theme.Bookmark
 import com.example.ui.theme.BookmarkBorder
+import com.example.ui.theme.History
 import com.example.ui.theme.NotificationsActive
 import com.example.ui.theme.NotificationsNone
 import com.example.ui.theme.Shuffle
@@ -87,6 +91,11 @@ import com.example.ui.theme.MuvioBg
 import com.example.ui.theme.MuvioBronze
 import com.example.ui.theme.MuvioChampagne
 import com.example.ui.theme.MuvioChampagneLight
+import com.example.ui.theme.MuvioCrimson
+import com.example.ui.theme.MuvioCrimsonBorder
+import com.example.ui.theme.MuvioCrimsonContainer
+import com.example.ui.theme.MuvioCrimsonDeep
+import com.example.ui.theme.MuvioCrimsonGlow
 import com.example.ui.theme.MuvioGlass
 import com.example.ui.theme.MuvioGlassBorder
 import com.example.ui.theme.MuvioLiveRed
@@ -128,7 +137,7 @@ fun NoirFullBleedHeroPager(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(455.dp)
+            .height(472.dp)
     ) {
         HorizontalPager(
             state = pagerState,
@@ -175,19 +184,32 @@ fun NoirFullBleedHeroPager(
                     )
                 }
 
-                // Multi-stop Noir velvet cinema scrim
+                // Multi-stop Velvet Obsidian + Ambient Crimson Cinema Stage Scrim
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0.0f to MuvioBg.copy(alpha = 0.72f),
-                                    0.28f to Color.Transparent,
-                                    0.58f to MuvioBg.copy(alpha = 0.55f),
-                                    0.85f to MuvioBg.copy(alpha = 0.94f),
+                                    0.0f to MuvioBg.copy(alpha = 0.78f),
+                                    0.26f to Color.Transparent,
+                                    0.54f to MuvioBg.copy(alpha = 0.48f),
+                                    0.84f to MuvioBg.copy(alpha = 0.94f),
                                     1.0f to MuvioBg
                                 )
+                            )
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    MuvioCrimson.copy(alpha = 0.22f),
+                                    Color.Transparent
+                                ),
+                                radius = 780f
                             )
                         )
                 )
@@ -205,18 +227,19 @@ fun NoirFullBleedHeroPager(
                         else -> "TRENDING MOVIE"
                     }
                     Surface(
-                        color = MuvioChampagne.copy(alpha = 0.16f),
-                        border = BorderStroke(0.8.dp, MuvioChampagne.copy(alpha = 0.55f)),
+                        color = MuvioCrimsonContainer.copy(alpha = 0.85f),
+                        border = BorderStroke(0.9.dp, MuvioCrimsonBorder),
                         shape = RoundedCornerShape(20.dp)
                     ) {
                         Text(
                             text = "$typeBadge  •  ${item.languageBadge?.uppercase() ?: "4K HDR"}",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.4.sp
                             ),
-                            color = MuvioChampagneLight,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            color = MuvioCrimsonGlow,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 4.5.dp)
                         )
                     }
 
@@ -260,16 +283,16 @@ fun NoirFullBleedHeroPager(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Luxury Action CTAs
+                    // Crimson Silk Ribbon Primary CTA + Frosted Glass Secondary CTA
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Surface(
                             shape = RoundedCornerShape(26.dp),
-                            shadowElevation = 8.dp,
+                            shadowElevation = 12.dp,
                             modifier = Modifier
-                                .height(46.dp)
+                                .height(48.dp)
                                 .clip(RoundedCornerShape(26.dp))
                                 .clickable { onMediaClick(item) }
                                 .testTag("hero_play_${item.id}")
@@ -278,16 +301,16 @@ fun NoirFullBleedHeroPager(
                                 modifier = Modifier
                                     .background(
                                         Brush.horizontalGradient(
-                                            listOf(MuvioChampagneLight, MuvioChampagne, MuvioBronze)
+                                            listOf(MuvioCrimsonGlow, MuvioCrimson, MuvioCrimsonDeep)
                                         )
                                     )
-                                    .padding(horizontal = 24.dp),
+                                    .padding(horizontal = 26.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.PlayArrow,
                                     contentDescription = "Watch Now",
-                                    tint = Color(0xFF140F05),
+                                    tint = Color.White,
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -297,17 +320,17 @@ fun NoirFullBleedHeroPager(
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp
                                     ),
-                                    color = Color(0xFF140F05)
+                                    color = Color.White
                                 )
                             }
                         }
 
                         Surface(
                             color = MuvioGlass,
-                            border = BorderStroke(1.dp, if (inList) MuvioChampagne else MuvioOutline),
+                            border = BorderStroke(1.dp, if (inList) MuvioCrimsonGlow else MuvioGlassBorder),
                             shape = RoundedCornerShape(26.dp),
                             modifier = Modifier
-                                .height(46.dp)
+                                .height(48.dp)
                                 .clip(RoundedCornerShape(26.dp))
                                 .clickable { onToggleWatchlist(item.id) }
                                 .testTag("hero_watchlist_${item.id}")
@@ -319,14 +342,14 @@ fun NoirFullBleedHeroPager(
                                 Icon(
                                     imageVector = if (inList) Icons.Rounded.Check else Icons.Rounded.Add,
                                     contentDescription = "My List",
-                                    tint = if (inList) MuvioChampagne else MuvioTextPrimary,
+                                    tint = if (inList) MuvioCrimsonGlow else MuvioTextPrimary,
                                     modifier = Modifier.size(19.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (inList) "In List" else "My List",
+                                    text = if (inList) "Saved" else "My List",
                                     style = MaterialTheme.typography.labelLarge,
-                                    color = if (inList) MuvioChampagne else MuvioTextPrimary
+                                    color = if (inList) MuvioCrimsonGlow else MuvioTextPrimary
                                 )
                             }
                         }
@@ -352,8 +375,8 @@ fun NoirFullBleedHeroPager(
             ) {
                 if (isApiConnected) {
                     Surface(
-                        color = MuvioGlass,
-                        border = BorderStroke(0.8.dp, MuvioGlassBorder),
+                        color = MuvioCrimsonContainer.copy(alpha = 0.85f),
+                        border = BorderStroke(0.8.dp, MuvioCrimsonBorder),
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Row(
@@ -364,13 +387,16 @@ fun NoirFullBleedHeroPager(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(MuvioChampagne)
+                                    .background(MuvioLiveRed)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = "LIVE",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = MuvioChampagne
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = MuvioTextPrimary
                             )
                         }
                     }
@@ -392,7 +418,7 @@ fun NoirFullBleedHeroPager(
                             Icon(
                                 imageVector = if (watchlistIds.isNotEmpty()) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
                                 contentDescription = "Open Watchlist",
-                                tint = if (watchlistIds.isNotEmpty()) MuvioChampagne else MuvioTextPrimary,
+                                tint = if (watchlistIds.isNotEmpty()) MuvioCrimsonGlow else MuvioTextPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -404,7 +430,7 @@ fun NoirFullBleedHeroPager(
                                 .padding(3.dp)
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(MuvioChampagne)
+                                .background(MuvioCrimsonGlow)
                         )
                     }
                 }
@@ -432,7 +458,7 @@ fun NoirFullBleedHeroPager(
             }
         }
 
-        // Slim Architectural Pager Indicator Bars
+        // Slim Architectural Crimson-to-Gold Pager Indicator Bars
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -443,17 +469,215 @@ fun NoirFullBleedHeroPager(
             repeat(heroItems.size) { index ->
                 val active = pagerState.currentPage == index
                 val indicatorWidth by animateDpAsState(
-                    targetValue = if (active) 24.dp else 7.dp,
+                    targetValue = if (active) 28.dp else 7.dp,
                     animationSpec = tween(durationMillis = 300),
                     label = "heroIndicatorWidth"
                 )
                 Box(
                     modifier = Modifier
-                        .height(3.dp)
+                        .height(3.5.dp)
                         .width(indicatorWidth)
                         .clip(CircleShape)
-                        .background(if (active) MuvioChampagne else MuvioOutline)
+                        .background(
+                            if (active) {
+                                Brush.horizontalGradient(listOf(MuvioCrimsonGlow, MuvioChampagne))
+                            } else {
+                                Brush.horizontalGradient(listOf(MuvioOutline, MuvioOutline))
+                            }
+                        )
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun VelvetSpotlightBento(
+    totalCatalogCount: Int,
+    onSelectCategory: (String) -> Unit,
+    onOpenSearch: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Left Hero Bento Tile — Cinema Vault
+        Surface(
+            color = MuvioSurfaceCard,
+            border = BorderStroke(1.dp, MuvioCrimsonBorder),
+            shape = RoundedCornerShape(22.dp),
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .weight(1.12f)
+                .height(118.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .clickable { onSelectCategory("Movies") }
+                .testTag("bento_cinema_movies")
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MuvioCrimsonDeep.copy(alpha = 0.55f),
+                                MuvioCrimsonContainer.copy(alpha = 0.8f),
+                                MuvioSurfaceCard
+                            )
+                        )
+                    )
+                    .padding(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Surface(
+                        color = MuvioCrimson.copy(alpha = 0.28f),
+                        border = BorderStroke(0.7.dp, MuvioCrimsonGlow.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = if (totalCatalogCount > 0) "$totalCatalogCount+ LIVE" else "4K CINEMA",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            ),
+                            color = MuvioCrimsonGlow,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Blockbusters",
+                            fontFamily = PlayfairFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = MuvioTextPrimary
+                        )
+                        Text(
+                            text = "Dual-Source HD Movies",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MuvioTextSecondary
+                        )
+                    }
+                }
+            }
+        }
+
+        // Right Stacked Glass Tiles — Series & Anime/Bangla
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Surface(
+                color = MuvioSurfaceCard,
+                border = BorderStroke(0.9.dp, MuvioChampagne.copy(alpha = 0.35f)),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable { onSelectCategory("Series") }
+                    .testTag("bento_binge_series")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(MuvioChampagne.copy(alpha = 0.14f), MuvioSurfaceCard)
+                            )
+                        )
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "Binge Series",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MuvioTextPrimary
+                        )
+                        Text(
+                            text = "K-Drama • Web Shows",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                            color = MuvioChampagne
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = MuvioChampagneLight,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = MuvioSurfaceCard,
+                    border = BorderStroke(0.8.dp, MuvioGlassBorder),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onSelectCategory("Anime") }
+                        .testTag("bento_anime")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0x28FF4260), MuvioSurfaceCard)
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Anime",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MuvioTextPrimary
+                        )
+                    }
+                }
+                Surface(
+                    color = MuvioSurfaceCard,
+                    border = BorderStroke(0.8.dp, MuvioGlassBorder),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onSelectCategory("Bengali") }
+                        .testTag("bento_bengali")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0x26EBC97B), MuvioSurfaceCard)
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Bangla",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MuvioChampagneLight
+                        )
+                    }
+                }
             }
         }
     }
@@ -491,8 +715,8 @@ fun NoirMoodConciergeSection(
 
             // Surprise Me Concierge CTA
             Surface(
-                color = MuvioChampagne.copy(alpha = 0.16f),
-                border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.65f)),
+                color = MuvioCrimsonContainer,
+                border = BorderStroke(1.dp, MuvioCrimsonBorder),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .clip(RoundedCornerShape(18.dp))
@@ -506,14 +730,14 @@ fun NoirMoodConciergeSection(
                     Icon(
                         imageVector = Icons.Rounded.AutoAwesome,
                         contentDescription = null,
-                        tint = MuvioChampagne,
+                        tint = MuvioCrimsonGlow,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = "Pick For Me",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MuvioChampagneLight
+                        color = MuvioTextPrimary
                     )
                 }
             }
@@ -528,10 +752,10 @@ fun NoirMoodConciergeSection(
             items(moods) { mood ->
                 val active = mood == selectedMood
                 Surface(
-                    color = if (active) MuvioChampagne else MuvioSurfaceCard,
+                    color = if (active) MuvioCrimson else MuvioSurfaceCard,
                     border = BorderStroke(
                         0.8.dp,
-                        if (active) MuvioChampagne else MuvioOutline
+                        if (active) MuvioCrimsonGlow else MuvioOutline
                     ),
                     shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
@@ -544,7 +768,7 @@ fun NoirMoodConciergeSection(
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
                         ),
-                        color = if (active) Color(0xFF140F05) else MuvioTextSecondary,
+                        color = if (active) Color.White else MuvioTextSecondary,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                     )
                 }
@@ -747,19 +971,19 @@ fun NoirContinueWatchingRail(
                             )
                     )
 
-                    // Center Frosted Play Emblem
+                    // Center Frosted Crimson Play Emblem
                     Surface(
                         color = MuvioGlass,
-                        border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.75f)),
+                        border = BorderStroke(1.dp, MuvioCrimsonGlow.copy(alpha = 0.85f)),
                         shape = CircleShape,
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .size(40.dp)
+                            .size(42.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.PlayArrow,
                             contentDescription = "Resume ${media.title}",
-                            tint = MuvioChampagneLight,
+                            tint = Color.White,
                             modifier = Modifier.padding(8.dp)
                         )
                     }
@@ -786,16 +1010,16 @@ fun NoirContinueWatchingRail(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "${(progress * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MuvioChampagne
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MuvioCrimsonGlow
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        // Slim Champagne Progress Bar
+                        // Glowing Crimson-to-Gold Silk Progress Track
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(3.dp)
+                                .height(3.5.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.18f))
                         ) {
@@ -804,7 +1028,9 @@ fun NoirContinueWatchingRail(
                                     .fillMaxWidth(progress.coerceIn(0.05f, 1f))
                                     .fillMaxHeight()
                                     .clip(CircleShape)
-                                    .background(MuvioChampagne)
+                                    .background(
+                                        Brush.horizontalGradient(listOf(MuvioCrimson, MuvioCrimsonGlow, MuvioChampagne))
+                                    )
                             )
                         }
                     }
@@ -1088,10 +1314,13 @@ fun NoirSearchOverlay(
     selectedSourceFilter: ContentSource? = null,
     secondarySourceError: String? = null,
     hotSearches: List<String>,
+    recentSearches: List<String> = emptyList(),
     suggestions: List<String>,
     allMedia: List<MediaItem>,
     onBack: () -> Unit,
     onQueryChange: (String) -> Unit,
+    onSubmitSearch: (String) -> Unit = {},
+    onClearRecentSearches: () -> Unit = {},
     onSelectSourceFilter: (ContentSource?) -> Unit = {},
     onRetrySecondarySource: () -> Unit = {},
     onMediaClick: (MediaItem) -> Unit
@@ -1185,6 +1414,14 @@ fun NoirSearchOverlay(
                             value = query,
                             onValueChange = onQueryChange,
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    if (query.trim().length >= 2) {
+                                        onSubmitSearch(query.trim())
+                                    }
+                                }
+                            ),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MuvioTextPrimary),
                             cursorBrush = SolidColor(MuvioChampagne),
                             modifier = Modifier
@@ -1250,13 +1487,75 @@ fun NoirSearchOverlay(
                                 shape = RoundedCornerShape(18.dp),
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(18.dp))
-                                    .clickable { onQueryChange(sug) }
+                                    .clickable {
+                                        onQueryChange(sug)
+                                        onSubmitSearch(sug)
+                                    }
                             ) {
                                 Text(
                                     text = sug,
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MuvioTextPrimary,
                                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (recentSearches.isNotEmpty()) {
+                item(key = "recent_searches_section") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.History,
+                                contentDescription = null,
+                                tint = MuvioTextSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "RECENT SEARCHES",
+                                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                                color = MuvioTextSecondary
+                            )
+                        }
+                        Text(
+                            text = "Clear",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MuvioCrimsonGlow,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onClearRecentSearches)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .testTag("clear_recent_searches_btn")
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(recentSearches, key = { "recent_$it" }) { recent ->
+                            Surface(
+                                color = MuvioSurfaceCard,
+                                border = BorderStroke(0.8.dp, MuvioGlassBorder),
+                                shape = RoundedCornerShape(18.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable {
+                                        onQueryChange(recent)
+                                        onSubmitSearch(recent)
+                                    }
+                                    .testTag("recent_search_chip_$recent")
+                            ) {
+                                Text(
+                                    text = recent,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MuvioTextPrimary,
+                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp)
                                 )
                             }
                         }
@@ -1279,7 +1578,10 @@ fun NoirSearchOverlay(
                             shape = RoundedCornerShape(18.dp),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(18.dp))
-                                .clickable { onQueryChange(tag) }
+                                .clickable {
+                                    onQueryChange(tag)
+                                    onSubmitSearch(tag)
+                                }
                         ) {
                             Text(
                                 text = tag,
@@ -1368,7 +1670,11 @@ fun NoirSearchOverlay(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No titles matched \"$trimmed\"",
+                            text = if (trimmed.isBlank()) {
+                                "No titles available for this source yet"
+                            } else {
+                                "No titles matched \"$trimmed\""
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MuvioTextSecondary
                         )
@@ -1383,7 +1689,12 @@ fun NoirSearchOverlay(
                         rowItems.forEach { item ->
                             MediaPosterCard(
                                 item = item,
-                                onClick = { onMediaClick(item) },
+                                onClick = {
+                                    if (trimmed.length >= 2) {
+                                        onSubmitSearch(trimmed)
+                                    }
+                                    onMediaClick(item)
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }

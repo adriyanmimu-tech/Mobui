@@ -342,3 +342,46 @@ val Icons.Rounded.Translate: ImageVector
         moveTo(15.88f, 17f); lineTo(17.5f, 12.67f); lineTo(19.12f, 17f); horizontalLineTo(15.88f); close()
     }.also { _translate = it }
 
+private var _lockOpen: ImageVector? = null
+val Icons.Rounded.LockOpen: ImageVector
+    get() = _lockOpen ?: materialIcon("LockOpen") {
+        moveTo(18f, 8f); horizontalLineTo(17f); verticalLineTo(6f); curveTo(17f, 3.24f, 14.76f, 1f, 12f, 1f); curveTo(9.24f, 1f, 7f, 3.24f, 7f, 6f); horizontalLineTo(9f); curveTo(9f, 4.34f, 10.34f, 3f, 12f, 3f); reflectiveCurveTo(15f, 4.34f, 15f, 6f); verticalLineTo(8f); horizontalLineTo(6f); curveTo(4.9f, 8f, 4f, 8.9f, 4f, 10f); verticalLineTo(20f); curveTo(4f, 21.1f, 4.9f, 22f, 6f, 22f); horizontalLineTo(18f); curveTo(19.1f, 22f, 20f, 21.1f, 20f, 20f); verticalLineTo(10f); curveTo(20f, 8.9f, 19.1f, 8f, 18f, 8f); close()
+        moveTo(18f, 20f); horizontalLineTo(6f); verticalLineTo(10f); horizontalLineTo(18f); verticalLineTo(20f); close()
+        moveTo(12f, 17f); curveTo(13.1f, 17f, 14f, 16.1f, 14f, 15f); reflectiveCurveTo(13.1f, 13f, 12f, 13f); reflectiveCurveTo(10f, 13.9f, 10f, 15f); reflectiveCurveTo(10.9f, 17f, 12f, 17f); close()
+    }.also { _lockOpen = it }
+
+private var _aspectRatio: ImageVector? = null
+val Icons.Rounded.AspectRatio: ImageVector
+    get() = _aspectRatio ?: materialIcon("AspectRatio") {
+        moveTo(19f, 12f); horizontalLineTo(17f); verticalLineTo(15f); horizontalLineTo(14f); verticalLineTo(17f); horizontalLineTo(19f); verticalLineTo(12f); close()
+        moveTo(7f, 9f); horizontalLineTo(10f); verticalLineTo(7f); horizontalLineTo(5f); verticalLineTo(12f); horizontalLineTo(7f); verticalLineTo(9f); close()
+        moveTo(21f, 3f); horizontalLineTo(3f); curveTo(1.9f, 3f, 1f, 3.9f, 1f, 5f); verticalLineTo(19f); curveTo(1f, 20.1f, 1.9f, 21f, 3f, 21f); horizontalLineTo(21f); curveTo(22.1f, 21f, 23f, 20.1f, 23f, 19f); verticalLineTo(5f); curveTo(23f, 3.9f, 22.1f, 3f, 21f, 3f); close()
+        moveTo(21f, 19.01f); horizontalLineTo(3f); verticalLineTo(4.99f); horizontalLineTo(21f); verticalLineTo(19.01f); close()
+    }.also { _aspectRatio = it }
+
+private var _skipNext: ImageVector? = null
+val Icons.Rounded.SkipNext: ImageVector
+    get() = _skipNext ?: materialIcon("SkipNext") {
+        moveTo(6f, 18f); lineTo(14.5f, 12f); lineTo(6f, 6f); verticalLineTo(18f); close()
+        moveTo(16f, 6f); verticalLineTo(18f); horizontalLineTo(18f); verticalLineTo(6f); horizontalLineTo(16f); close()
+    }.also { _skipNext = it }
+
+private var _explore: ImageVector? = null
+val Icons.Rounded.Explore: ImageVector
+    get() = _explore ?: materialIcon("Explore") {
+        moveTo(12f, 10.9f); curveTo(11.39f, 10.9f, 10.9f, 11.39f, 10.9f, 12f); curveTo(10.9f, 12.61f, 11.39f, 13.1f, 12f, 13.1f); curveTo(12.61f, 13.1f, 13.1f, 12.61f, 13.1f, 12f); curveTo(13.1f, 11.39f, 12.61f, 10.9f, 12f, 10.9f); close()
+        moveTo(12f, 2f); curveTo(6.48f, 2f, 2f, 6.48f, 2f, 12f); reflectiveCurveTo(6.48f, 22f, 12f, 22f); reflectiveCurveTo(22f, 17.52f, 22f, 12f); reflectiveCurveTo(17.52f, 2f, 12f, 2f); close()
+        moveTo(14.19f, 14.19f); lineTo(6f, 18f); lineTo(9.81f, 9.81f); lineTo(18f, 6f); lineTo(14.19f, 14.19f); close()
+    }.also { _explore = it }
+
+val Icons.Outlined.Explore: ImageVector
+    get() = Icons.Rounded.Explore
+
+private var _history: ImageVector? = null
+val Icons.Rounded.History: ImageVector
+    get() = _history ?: materialIcon("History") {
+        moveTo(13f, 3f); curveTo(8.03f, 3f, 4f, 7.03f, 4f, 12f); horizontalLineTo(1f); lineTo(4.89f, 15.89f); lineTo(4.96f, 16.03f); lineTo(9f, 12f); horizontalLineTo(6f); curveTo(6f, 8.13f, 9.13f, 5f, 13f, 5f); reflectiveCurveTo(20f, 8.13f, 20f, 12f); reflectiveCurveTo(16.87f, 19f, 13f, 19f); curveTo(11.07f, 19f, 9.32f, 18.21f, 8.06f, 16.94f); lineTo(6.64f, 18.36f); curveTo(8.27f, 19.99f, 10.51f, 21f, 13f, 21f); curveTo(17.97f, 21f, 22f, 16.97f, 22f, 12f); reflectiveCurveTo(17.97f, 3f, 13f, 3f); close()
+        moveTo(12f, 8f); verticalLineTo(13f); lineTo(16.28f, 15.54f); lineTo(17f, 14.33f); lineTo(13.5f, 12.25f); verticalLineTo(8f); horizontalLineTo(12f); close()
+    }.also { _history = it }
+
+

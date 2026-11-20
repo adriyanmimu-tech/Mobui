@@ -197,7 +197,8 @@ data class CommentItem(
 enum class DownloadStatus {
     DOWNLOADING,
     PAUSED,
-    COMPLETED
+    COMPLETED,
+    FAILED
 }
 
 data class DownloadItem(
@@ -207,5 +208,11 @@ data class DownloadItem(
     val sizeText: String,
     val progress: Float,
     val status: DownloadStatus,
-    val poster: PosterArtwork
+    val poster: PosterArtwork,
+    val localFilePath: String? = null,
+    val streamUrl: String = "",
+    val downloadId: String = mediaId,
+    val season: Int = 1,
+    val episode: Int = 1,
+    val episodeLabel: String = ""
 )

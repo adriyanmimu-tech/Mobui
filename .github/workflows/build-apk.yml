@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -37,27 +37,58 @@ jobs:
             yes | "$SDK_MANAGER" --licenses > /dev/null 2>&1 || true
           fi
 
-      - name: Prepare debug keystore
+      - name: Prepare release signing keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
-            tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore || rm -f debug.keystore
-          fi
-          if [ ! -s debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$RELEASE_STORE_PASSWORD" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > my-upload-key.jks
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=$RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            # Reuse the repository's deterministic key under the 'upload' alias so every
+            # GitHub Release APK keeps the same signature and updates cleanly on user devices.
+            if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+              tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore || rm -f debug.keystore
+            fi
+            if [ -s debug.keystore ]; then
+              keytool -importkeystore \
+                -srckeystore debug.keystore \
+                -srcstorepass android \
+                -srcalias androiddebugkey \
+                -srckeypass android \
+                -destkeystore my-upload-key.jks \
+                -deststoretype PKCS12 \
+                -deststorepass android \
+                -destalias upload \
+                -destkeypass android \
+                -noprompt || rm -f my-upload-key.jks
+            fi
+            if [ ! -s my-upload-key.jks ]; then
+              keytool -genkeypair -v \
+                -keystore my-upload-key.jks \
+                -storetype PKCS12 \
+                -storepass android \
+                -alias upload \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Muvio Release,O=Muvio,C=BD"
+            fi
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=android" >> "$GITHUB_ENV"
           fi
 
-      - name: Configure optional API secrets
+      - name: Configure API & Remote Config secrets
         env:
           MOVIEBOX_API_KEY: ${{ secrets.MOVIEBOX_API_KEY }}
           SECONDARY_CATALOG_API_KEY: ${{ secrets.SECONDARY_CATALOG_API_KEY }}
+          REMOTE_CONFIG_URL: ${{ secrets.REMOTE_CONFIG_URL }}
         run: |
           if [ -n "$MOVIEBOX_API_KEY" ]; then
             echo "MOVIEBOX_API_KEY=$MOVIEBOX_API_KEY" >> .env
@@ -65,29 +96,34 @@ jobs:
           if [ -n "$SECONDARY_CATALOG_API_KEY" ]; then
             echo "SECONDARY_CATALOG_API_KEY=$SECONDARY_CATALOG_API_KEY" >> .env
           fi
+          if [ -n "$REMOTE_CONFIG_URL" ]; then
+            echo "REMOTE_CONFIG_URL=$REMOTE_CONFIG_URL" >> .env
+          else
+            echo "REMOTE_CONFIG_URL=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/app_config.json" >> .env
+          fi
 
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Build Release APK
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Verify APK output
-        run: ls -lh app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify Release APK output
+        run: ls -lh app/build/outputs/apk/release/app-release.apk
 
-      - name: Upload APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Muvio Latest APK
+          name: Muvio Latest Release APK
           body: |
-            Automatic Android APK build for **Muvio**.
+            Automatic signed **Release APK** build for **Muvio** (R8 minified & resource-shrunk).
 
-            Download `app-debug.apk` from the Assets section below.
+            Download `app-release.apk` from the Assets section below.
           make_latest: true
           files: |
-            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk

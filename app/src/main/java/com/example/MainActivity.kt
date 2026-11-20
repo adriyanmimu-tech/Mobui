@@ -55,11 +55,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import android.content.Intent
 import com.example.data.MuvioDownloadEngine
 import com.example.data.MuvioPreferencesStore
 import com.example.model.DownloadStatus
 import com.example.model.MainTab
 import com.example.ui.components.MuvioBottomBar
+import com.example.ui.components.MuvioInAppUpdateDialog
 import com.example.ui.screens.DetailPlayerScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.ExploreHubScreen
@@ -251,6 +253,12 @@ fun MuvioApp() {
                     ) { activeTab ->
                     when (activeTab) {
                         MainTab.HOME -> {
+                            val southAsiaList = remember(
+                                uiState.allMedia,
+                                uiState.remoteConfig
+                            ) {
+                                viewModel.southAsiaTrendingItems()
+                            }
                             val seriesList = remember(
                                 uiState.allMedia,
                                 uiState.selectedSeriesFilter,
@@ -276,6 +284,7 @@ fun MuvioApp() {
                             }
                             HomeScreen(
                                 uiState = uiState,
+                                southAsiaList = southAsiaList,
                                 seriesList = seriesList,
                                 moviesList = moviesList,
                                 continueWatchingItems = continueWatching,
@@ -334,7 +343,19 @@ fun MuvioApp() {
                                     viewModel.openUpcomingBrowse()
                                     navController.navigate("category/${Uri.encode("Coming Soon")}")
                                 },
-                                onRefreshApi = viewModel::refreshHomeFeed
+                                onOpenDownloads = {
+                                    viewModel.selectTab(MainTab.DOWNLOADS)
+                                },
+                                onOpenAnnouncementUrl = { url ->
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    }
+                                },
+                                onDismissAnnouncement = viewModel::dismissAnnouncement,
+                                onRefreshApi = {
+                                    viewModel.refreshHomeFeed()
+                                    viewModel.fetchRemoteConfig(userInitiated = false)
+                                }
                             )
                         }
 
@@ -419,7 +440,11 @@ fun MuvioApp() {
                                 },
                                 onClearHistory = viewModel::clearWatchHistory,
                                 onClearCache = viewModel::clearAppCache,
-                                onRefreshApi = viewModel::refreshHomeFeed,
+                                onCheckForUpdates = { viewModel.fetchRemoteConfig(userInitiated = true) },
+                                onRefreshApi = {
+                                    viewModel.refreshHomeFeed()
+                                    viewModel.fetchRemoteConfig(userInitiated = false)
+                                },
                                 onSelectMeSection = viewModel::selectMeSection,
                                 onToggleWatchlist = viewModel::toggleWatchlist
                             )
@@ -462,6 +487,7 @@ fun MuvioApp() {
                     val liveStreams = uiState.streamsByMedia[media.id].orEmpty()
                     val selectedStreamIdx = uiState.selectedStreamIndexByMedia[media.id] ?: 0
 
+                    val episodeKey = "${media.id}_s${selectedSeason}_e${selectedEp}"
                     DetailPlayerScreen(
                         media = mediaForDisplay,
                         recommendations = recommendations,
@@ -475,14 +501,16 @@ fun MuvioApp() {
                         isInWatchlist = media.id in uiState.watchlistIds,
                         selectedLanguage = selectedLang,
                         selectedEpisode = selectedEp,
-                        initialProgressFraction = uiState.watchProgressByMedia[media.id] ?: 0f,
+                        initialResumePositionMs = uiState.watchPositionMsByEpisode[episodeKey] ?: 0L,
                         autoPlayNext = uiState.autoPlayNext,
                         subtitleSize = uiState.subtitleSize,
                         onSelectSubtitleSize = viewModel::setSubtitleSize,
                         sleepTimerMinutes = uiState.sleepTimerMinutes,
                         onCycleSleepTimer = viewModel::cycleSleepTimer,
                         onSleepTimerElapsed = { viewModel.resetSleepTimer(showNotice = true) },
-                        onProgressChange = { frac -> viewModel.updateWatchProgress(media.id, frac) },
+                        onProgressChange = { frac, posMs, durMs ->
+                            viewModel.updateWatchProgress(media.id, frac, posMs, durMs)
+                        },
                         onRetryStream = { viewModel.fetchStreamsForMedia(mediaForDisplay, selectedSeason, selectedEp) },
                         onFallbackToAlternateStream = { viewModel.fallbackToAlternateStream(mediaForDisplay, selectedSeason, selectedEp) },
                         onBack = { navController.popBackStack() },
@@ -563,6 +591,22 @@ fun MuvioApp() {
                         Text("Cancel", color = MuvioTextPrimary.copy(alpha = 0.7f))
                     }
                 }
+            )
+        }
+
+        // In-App Online Update Checker Dialog (Play Policy safe: opens verified HTTPS release/store link)
+        if (uiState.showUpdateDialog && uiState.remoteConfig.updateUrl.startsWith("https://")) {
+            MuvioInAppUpdateDialog(
+                config = uiState.remoteConfig,
+                onUpdateNow = { url ->
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    }
+                    if (!uiState.remoteConfig.forceUpdate) {
+                        viewModel.dismissUpdateDialog()
+                    }
+                },
+                onDismiss = viewModel::dismissUpdateDialog
             )
         }
 

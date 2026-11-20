@@ -303,16 +303,16 @@ class MovieBoxApiClient(
             return Result.failure(ApiKeyMissingException())
         }
         var lastError: Throwable? = null
-        repeat(2) { attempt ->
+        repeat(3) { attempt ->
             try {
                 val request = Request.Builder().url(url).get().build()
                 httpClient.newCall(request).execute().use { response ->
                     val bodyStr = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
-                        val isRetryable = response.code in listOf(502, 503, 504)
+                        val isRetryable = response.code in listOf(429, 502, 503, 504)
                         lastError = IOException("HTTP ${response.code}: ${bodyStr.take(180)}")
-                        if (isRetryable && attempt == 0) {
-                            Thread.sleep(700L)
+                        if (isRetryable && attempt < 2) {
+                            Thread.sleep(900L * (attempt + 1))
                             return@repeat
                         }
                         return Result.failure(lastError!!)
@@ -327,8 +327,13 @@ class MovieBoxApiClient(
                 }
             } catch (e: java.net.SocketTimeoutException) {
                 lastError = e
-                if (attempt == 0) {
-                    Thread.sleep(500L)
+                if (attempt < 2) {
+                    Thread.sleep(850L * (attempt + 1))
+                }
+            } catch (e: java.net.ConnectException) {
+                lastError = e
+                if (attempt < 2) {
+                    Thread.sleep(850L * (attempt + 1))
                 }
             } catch (e: Exception) {
                 return Result.failure(e)

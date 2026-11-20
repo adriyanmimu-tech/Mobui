@@ -45,10 +45,12 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.ApiCategory
 import com.example.model.ContentSource
+import com.example.model.DownloadStatus
 import com.example.model.LiveMatchItem
 import com.example.model.MediaItem
 import com.example.model.MediaType
 import com.example.model.PlatformBrand
+import com.example.ui.components.LiveAnnouncementBanner
 import com.example.ui.components.MediaPosterCard
 import com.example.ui.components.SectionHeader
 import com.example.ui.theme.MuvioBg
@@ -71,6 +73,7 @@ import com.example.ui.viewmodel.MuvioUiState
 @Composable
 fun HomeScreen(
     uiState: MuvioUiState,
+    southAsiaList: List<MediaItem> = emptyList(),
     seriesList: List<MediaItem>,
     moviesList: List<MediaItem>,
     continueWatchingItems: List<Pair<MediaItem, Float>> = emptyList(),
@@ -96,6 +99,9 @@ fun HomeScreen(
     onPlatformClick: (PlatformBrand) -> Unit = {},
     onApiCategoryClick: (ApiCategory) -> Unit = {},
     onUpcomingSeeAllClick: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
+    onOpenAnnouncementUrl: (String) -> Unit = {},
+    onDismissAnnouncement: () -> Unit = {},
     onRefreshApi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -242,6 +248,7 @@ fun HomeScreen(
             // Loading / Quick-Connect / Sync Status Area
             if (uiState.allMedia.isEmpty()) {
                 val needsKeys = !uiState.isApiKeyConfigured && !uiState.isSecondaryApiConfigured
+                val offlineCompletedCount = uiState.downloads.count { it.status == DownloadStatus.COMPLETED }
                 item(key = "home_empty_catalog_state") {
                     when {
                         uiState.isLoadingHome -> {
@@ -249,13 +256,17 @@ fun HomeScreen(
                         }
                         needsKeys -> {
                             HomeSecretsRequiredCard(
-                                onRetrySync = onRefreshApi
+                                offlineDownloadCount = offlineCompletedCount,
+                                onRetrySync = onRefreshApi,
+                                onOpenDownloads = onOpenDownloads
                             )
                         }
                         else -> {
                             HomeConnectionErrorCard(
                                 statusMessage = uiState.apiStatusMessage,
-                                onRetry = onRefreshApi
+                                offlineDownloadCount = offlineCompletedCount,
+                                onRetry = onRefreshApi,
+                                onOpenDownloads = onOpenDownloads
                             )
                         }
                     }
@@ -304,6 +315,24 @@ fun HomeScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // 1b. Remote Live Announcement / Update Notice Banner (instant online updates via app_config.json)
+            if (uiState.remoteConfig.announcementText.isNotBlank() && !uiState.isAnnouncementDismissed) {
+                item(key = "home_live_announcement", contentType = "announcement") {
+                    val actionUrl = uiState.remoteConfig.announcementActionUrl
+                    LiveAnnouncementBanner(
+                        tag = uiState.remoteConfig.announcementTag,
+                        message = uiState.remoteConfig.announcementText,
+                        hasActionLink = actionUrl.startsWith("https://"),
+                        onBannerClick = {
+                            if (actionUrl.startsWith("https://")) {
+                                onOpenAnnouncementUrl(actionUrl)
+                            }
+                        },
+                        onDismiss = onDismissAnnouncement
+                    )
                 }
             }
 
@@ -482,6 +511,35 @@ fun HomeScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // 5. Auto-Updating Trending in Bangladesh, India & South Asia Rail (MovieBox + MovieLink BD)
+            if (southAsiaList.isNotEmpty() && activeTopTab != "18+") {
+                item(key = "home_south_asia_trending", contentType = "shelf") {
+                    SectionHeader(
+                        title = stringResource(R.string.section_south_asia_trending),
+                        eyebrow = stringResource(R.string.eyebrow_south_asia),
+                        onSeeAllClick = { onSeeAllClick("Trending in BD & South Asia") }
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            southAsiaList,
+                            key = { idx, item -> "sa_${item.id}_$idx" },
+                            contentType = { _, _ -> "poster" }
+                        ) { idx, item ->
+                            MediaPosterCard(
+                                item = item.copy(rankNumber = if (idx < 10) idx + 1 else null),
+                                showRank = idx < 10,
+                                onClick = { onMediaClick(item) },
+                                modifier = Modifier.width(132.dp)
+                            )
                         }
                     }
                 }

@@ -1014,6 +1014,7 @@ fun MeScreen(
     onCycleSubtitleSize: () -> Unit = {},
     onClearHistory: () -> Unit = {},
     onClearCache: () -> Unit = {},
+    onCheckForUpdates: () -> Unit = {},
     onRefreshApi: () -> Unit = {},
     onSelectMeSection: (Int) -> Unit = {},
     onToggleWatchlist: (String) -> Unit = {},
@@ -1639,6 +1640,57 @@ fun MeScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                item(key = "app_updates_card") {
+                    Text(
+                        text = "Online Updates & Version",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MuvioTextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MuvioSurfaceCard,
+                        border = BorderStroke(1.dp, MuvioOutline),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(enabled = !uiState.isCheckingUpdates, onClick = onCheckForUpdates)
+                            .testTag("settings_check_updates_row")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Check for App Updates",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MuvioTextPrimary
+                                )
+                                Text(
+                                    text = buildString {
+                                        append("Current: v${com.example.BuildConfig.VERSION_NAME}")
+                                        if (uiState.isRemoteConfigSynced) {
+                                            append(" • Online Remote Sync Active")
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MuvioTextSecondary
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = if (uiState.isCheckingUpdates) "Checking..." else "Check Now",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MuvioChampagne
+                            )
                         }
                     }
                 }

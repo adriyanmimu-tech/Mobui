@@ -216,3 +216,31 @@ data class DownloadItem(
     val episode: Int = 1,
     val episodeLabel: String = ""
 )
+
+data class RemoteAppConfig(
+    val latestVersionCode: Int = 1,
+    val latestVersionName: String = "1.0",
+    val forceUpdate: Boolean = false,
+    val updateTitle: String = "",
+    val updateNotes: String = "",
+    val updateUrl: String = "",
+    val announcementTag: String = "LIVE UPDATE",
+    val announcementText: String = "",
+    val announcementActionUrl: String = "",
+    val movieBoxBaseUrl: String = "",
+    val secondaryCatalogBaseUrl: String = "",
+    val featuredBannerTitles: List<String> = emptyList(),
+    val priorityRegions: List<String> = listOf(
+        "Bangladesh",
+        "India",
+        "Bengali",
+        "Bangla",
+        "Hindi",
+        "South Asia",
+        "Bollywood",
+        "Tamil",
+        "Telugu",
+        "Malayalam"
+    )
+)
+

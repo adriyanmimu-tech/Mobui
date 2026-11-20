@@ -122,7 +122,9 @@ fun HomeLiveSyncingCard(
 
 @Composable
 fun HomeSecretsRequiredCard(
+    offlineDownloadCount: Int = 0,
     onRetrySync: () -> Unit,
+    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -170,7 +172,7 @@ fun HomeSecretsRequiredCard(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "AI STUDIO SECRETS SETUP",
+                        text = stringResource(R.string.home_secrets_setup_eyebrow),
                         style = MaterialTheme.typography.labelSmall.copy(
                             letterSpacing = 1.3.sp,
                             fontWeight = FontWeight.Bold
@@ -178,7 +180,7 @@ fun HomeSecretsRequiredCard(
                         color = MuvioChampagne
                     )
                     Text(
-                        text = "API Key সেট করা বাকি আছে",
+                        text = stringResource(R.string.home_secrets_setup_title),
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MuvioTextPrimary
                     )
@@ -187,7 +189,7 @@ fun HomeSecretsRequiredCard(
 
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "AI Studio-এর Secrets প্যানেলে MOVIEBOX_API_KEY ও SECONDARY_CATALOG_API_KEY যোগ করে বিল্ড করলেই কোনো লগইন ছাড়াই সব মুভি, সিরিজ ও অ্যানিমে সরাসরি চালু হয়ে যাবে।",
+                text = stringResource(R.string.home_secrets_setup_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 color = MuvioTextSecondary
             )
@@ -216,6 +218,28 @@ fun HomeSecretsRequiredCard(
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }
+
+            if (offlineDownloadCount > 0) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = onOpenDownloads,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MuvioSurfaceElevated,
+                        contentColor = MuvioChampagne
+                    ),
+                    border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.55f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("home_open_downloads_shortcut_btn")
+                ) {
+                    Text(
+                        text = "${stringResource(R.string.home_open_downloads_cta)} ($offlineDownloadCount)",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
         }
     }
 }
@@ -223,7 +247,9 @@ fun HomeSecretsRequiredCard(
 @Composable
 fun HomeConnectionErrorCard(
     statusMessage: String,
+    offlineDownloadCount: Int = 0,
     onRetry: () -> Unit,
+    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -290,6 +316,27 @@ fun HomeConnectionErrorCard(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = stringResource(R.string.home_retry_sync_cta),
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onOpenDownloads,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MuvioSurfaceElevated,
+                    contentColor = MuvioChampagne
+                ),
+                border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.55f)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("home_open_downloads_shortcut_btn")
+            ) {
+                val countSuffix = if (offlineDownloadCount > 0) " ($offlineDownloadCount)" else ""
+                Text(
+                    text = "${stringResource(R.string.home_open_downloads_cta)}$countSuffix",
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                 )
             }

@@ -1,0 +1,24 @@
+{
+  "latestVersionCode": 1,
+  "latestVersionName": "1.0",
+  "forceUpdate": false,
+  "updateTitle": "Muvio নতুন আপডেট এসেছে!",
+  "updateNotes": "• বাংলাদেশ, ইন্ডিয়া ও সাউথ এশিয়ার নতুন হিট মুভি ও সিরিজ\n• দ্রুত ভিডিও প্লেব্যাক ও বাগ ফিক্স\n• নতুন শর্ট রিলস অভিজ্ঞতা",
+  "updateUrl": "https://github.com/your-username/muvio-releases/releases/latest",
+  "announcementTag": "LIVE UPDATE",
+  "announcementText": "",
+  "announcementActionUrl": "",
+  "movieBoxBaseUrl": "https://hd-w0l1.onrender.com/api/trial",
+  "secondaryCatalogBaseUrl": "https://movei-link.onrender.com/api/v1",
+  "featuredBannerTitles": [],
+  "priorityRegions": [
+    "Bangladesh",
+    "India",
+    "Bengali",
+    "Hindi",
+    "South Asia",
+    "Tamil",
+    "Telugu",
+    "Malayalam"
+  ]
+}

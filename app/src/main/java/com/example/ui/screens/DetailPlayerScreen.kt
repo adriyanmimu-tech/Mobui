@@ -199,14 +199,14 @@ fun DetailPlayerScreen(
     isInWatchlist: Boolean,
     selectedLanguage: String,
     selectedEpisode: Int,
-    initialProgressFraction: Float = 0f,
+    initialResumePositionMs: Long = 0L,
     autoPlayNext: Boolean = true,
     subtitleSize: String = "Medium",
     onSelectSubtitleSize: (String) -> Unit = {},
     sleepTimerMinutes: Int = 0,
     onCycleSleepTimer: () -> Unit = {},
     onSleepTimerElapsed: () -> Unit = {},
-    onProgressChange: (Float) -> Unit = {},
+    onProgressChange: (Float, Long, Long) -> Unit = { _, _, _ -> },
     onRetryStream: () -> Unit = {},
     onFallbackToAlternateStream: () -> Unit = {},
     onBack: () -> Unit,
@@ -417,7 +417,7 @@ fun DetailPlayerScreen(
                 hasNextEpisode = hasNextEpisode,
                 isInPipMode = isInPipMode,
                 showControls = showControls && !isInPipMode && !isPlayerLocked,
-                initialProgressFraction = initialProgressFraction,
+                initialResumePositionMs = initialResumePositionMs,
                 simulatedProgressFraction = progressFraction,
                 streamCount = availableResources.size,
                 selectedStreamIndex = selectedStreamIndex,
@@ -1091,7 +1091,7 @@ private fun PlayerStage(
     hasNextEpisode: Boolean,
     isInPipMode: Boolean,
     showControls: Boolean,
-    initialProgressFraction: Float,
+    initialResumePositionMs: Long,
     simulatedProgressFraction: Float,
     streamCount: Int,
     selectedStreamIndex: Int,
@@ -1109,7 +1109,7 @@ private fun PlayerStage(
     onNextEpisode: () -> Unit,
     onPlaybackEnded: () -> Unit,
     onEnterPip: () -> Unit,
-    onProgressReport: (Float) -> Unit,
+    onProgressReport: (Float, Long, Long) -> Unit,
     onSimulatedSeekFraction: (Float) -> Unit,
     onSimulatedRewind10: () -> Unit,
     onSimulatedForward10: () -> Unit,
@@ -1128,21 +1128,35 @@ private fun PlayerStage(
     var isBuffering by remember { mutableStateOf(false) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var retryCounter by remember { mutableIntStateOf(0) }
+    var sameStreamRetryCount by remember { mutableIntStateOf(0) }
+    var hasStartedPlayingEpisode by remember { mutableStateOf(false) }
     var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
     var lastLoadedEpisodeKey by remember { mutableStateOf(episodeKey) }
-    var lastKnownPositionMs by remember(episodeKey) { mutableStateOf(0L) }
+    var lastKnownPositionMs by remember { mutableStateOf(0L) }
     var appliedInitialResumeForEpisode by remember { mutableStateOf<String?>(null) }
     var playerBoundsRect by remember { mutableStateOf<Rect?>(null) }
     var alternateFallbackTriedEpisode by remember { mutableStateOf<String?>(null) }
-    val triedStreamIndices = remember(episodeKey, streamCount) { mutableSetOf<Int>() }
+    val triedStreamIndices = remember { mutableSetOf<Int>() }
     val currentStreamCount by rememberUpdatedState(streamCount)
     val currentSelectedStreamIndex by rememberUpdatedState(selectedStreamIndex)
     val currentEpisodeKey by rememberUpdatedState(episodeKey)
     val currentIsPlaying by rememberUpdatedState(isPlaying)
-    val currentInitialProgress by rememberUpdatedState(initialProgressFraction)
+    val currentInitialResumeMs by rememberUpdatedState(initialResumePositionMs)
     val currentOnSelectStreamIndex by rememberUpdatedState(onSelectStreamIndex)
     val currentOnFallbackToAlternateStream by rememberUpdatedState(onFallbackToAlternateStream)
     val currentOnPlaybackEnded by rememberUpdatedState(onPlaybackEnded)
+    val currentOnProgressReport by rememberUpdatedState(onProgressReport)
+
+    LaunchedEffect(episodeKey) {
+        hasStartedPlayingEpisode = false
+        lastKnownPositionMs = 0L
+        sameStreamRetryCount = 0
+        triedStreamIndices.clear()
+    }
+
+    LaunchedEffect(episodeKey, streamUrl) {
+        sameStreamRetryCount = 0
+    }
 
     // Smooth vertical swipe gesture state for left=Brightness, right=Volume
     var gestureHudState by remember { mutableStateOf<PlayerGestureHudState?>(null) }
@@ -1181,7 +1195,7 @@ private fun PlayerStage(
     }
 
     // Load or hot-swap media item cleanly while preserving playback position on quality/subtitle switches
-    LaunchedEffect(exoPlayer, streamUrl, activeSub?.url, retryCounter) {
+    LaunchedEffect(exoPlayer, episodeKey, streamUrl, activeSub?.url, retryCounter) {
         val player = exoPlayer ?: return@LaunchedEffect
         if (streamUrl.isBlank()) return@LaunchedEffect
 
@@ -1190,7 +1204,12 @@ private fun PlayerStage(
         val sameEpisode = lastLoadedEpisodeKey == episodeKey
         val livePos = player.currentPosition.takeIf { it > 2_000L } ?: 0L
         val resumeMs = if (sameEpisode) maxOf(livePos, lastKnownPositionMs) else 0L
-        if (!sameEpisode) lastKnownPositionMs = 0L
+        if (!sameEpisode) {
+            lastKnownPositionMs = 0L
+            hasStartedPlayingEpisode = false
+            sameStreamRetryCount = 0
+            triedStreamIndices.clear()
+        }
         lastLoadedEpisodeKey = episodeKey
 
         val builder = ExoMediaItem.Builder().setUri(streamUrl)
@@ -1227,7 +1246,9 @@ private fun PlayerStage(
                 playbackError = null
                 isBuffering = true
                 currentOnSelectStreamIndex(nextIdx)
-            } else if (alternateFallbackTriedEpisode != currentEpisodeKey) {
+            } else if (!hasStartedPlayingEpisode && alternateFallbackTriedEpisode != currentEpisodeKey) {
+                // Only attempt cross-source backup when initial load failed at 00:00 —
+                // NEVER hijack a video that is already playing by switching servers mid-playback.
                 alternateFallbackTriedEpisode = currentEpisodeKey
                 triedStreamIndices.clear()
                 playbackError = null
@@ -1245,27 +1266,65 @@ private fun PlayerStage(
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
                     val player = exoPlayer
-                    val savedFrac = currentInitialProgress
+                    val savedResumeMs = currentInitialResumeMs
                     if (player != null &&
-                        appliedInitialResumeForEpisode != currentEpisodeKey &&
-                        savedFrac in 0.03f..0.95f &&
-                        player.currentPosition < 2_000L &&
-                        player.duration > 30_000L
+                        appliedInitialResumeForEpisode != currentEpisodeKey
                     ) {
                         appliedInitialResumeForEpisode = currentEpisodeKey
-                        player.seekTo((player.duration * savedFrac).toLong())
+                        // Only auto-resume when user genuinely watched >= 45s of THIS exact episode
+                        // and has > 30s remaining; otherwise always start cleanly from 00:00.
+                        if (savedResumeMs >= 45_000L &&
+                            player.duration > 90_000L &&
+                            savedResumeMs < player.duration - 30_000L &&
+                            player.currentPosition < 2_000L
+                        ) {
+                            player.seekTo(savedResumeMs)
+                        }
                     }
                 } else if (playbackState == Player.STATE_ENDED) {
-                    val dur = exoPlayer?.duration ?: C.TIME_UNSET
+                    val player = exoPlayer
+                    val dur = player?.duration ?: C.TIME_UNSET
+                    val pos = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
                     if (dur <= 0L && playbackError == null) {
                         tryNextStreamOrBackup("ভিডিও স্ট্রীম চালু হয়নি, আবার চেষ্টা করুন")
                     } else if (dur > 0L) {
-                        currentOnPlaybackEnded()
+                        val reachedRealEnd = pos >= dur - 20_000L || (pos.toFloat() / dur.toFloat()) >= 0.94f
+                        if (reachedRealEnd) {
+                            // Genuinely finished this video/episode — clear saved resume position & advance if enabled
+                            currentOnProgressReport(1f, 0L, dur)
+                            currentOnPlaybackEnded()
+                        } else if (pos > 3_000L && sameStreamRetryCount < 2) {
+                            // Upstream proxy/CDN closed the connection early mid-video —
+                            // retry the EXACT SAME stream from current position instead of jumping to another video!
+                            sameStreamRetryCount += 1
+                            lastKnownPositionMs = pos
+                            playbackError = null
+                            isBuffering = true
+                            retryCounter += 1
+                        } else {
+                            isBuffering = false
+                            playbackError = "নেটওয়ার্ক বিচ্ছিন্ন হয়েছে, Retry চাপুন"
+                        }
                     }
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val player = exoPlayer
+                val currentPos = maxOf(
+                    player?.currentPosition?.takeIf { it > 0L } ?: 0L,
+                    lastKnownPositionMs
+                )
+                // If video was already playing and hit a transient network/Range hiccup,
+                // reconnect the SAME stream at the same timestamp before switching qualities.
+                if (currentPos > 3_000L && sameStreamRetryCount < 2) {
+                    sameStreamRetryCount += 1
+                    lastKnownPositionMs = currentPos
+                    playbackError = null
+                    isBuffering = true
+                    retryCounter += 1
+                    return
+                }
                 val causeDetail = error.cause?.message?.takeIf { it.isNotBlank() }
                     ?: error.localizedMessage?.takeIf { it.isNotBlank() }
                 val message = if (causeDetail != null) {
@@ -1362,18 +1421,19 @@ private fun PlayerStage(
     }
 
     // Gentle low-overhead watch progress sync every 5 seconds without triggering UI recomposition
-    LaunchedEffect(exoPlayer, isPlaying) {
+    LaunchedEffect(exoPlayer, isPlaying, episodeKey) {
         val player = exoPlayer ?: return@LaunchedEffect
         while (isPlaying) {
             delay(5_000L)
             val pos = player.currentPosition
-            if (pos > 2_000L) {
+            if (pos > 3_000L) {
+                hasStartedPlayingEpisode = true
                 lastKnownPositionMs = pos
             }
             val dur = player.duration
-            if (dur > 0L) {
+            if (dur > 0L && pos > 0L) {
                 val frac = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
-                onProgressReport(frac)
+                currentOnProgressReport(frac, pos, dur)
             }
         }
     }

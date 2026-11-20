@@ -2,12 +2,14 @@ package com.example.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.ApiKeyMissingException
 import com.example.data.MovieBoxApiClient
 import com.example.data.MovieBoxParsers
 import com.example.data.MuvioCatalogRepository
 import com.example.data.MuvioDownloadEngine
 import com.example.data.MuvioPreferencesStore
+import com.example.data.MuvioRemoteConfigClient
 import com.example.data.MuvioSeedRepository
 import com.example.data.SecondaryCatalogApiClient
 import com.example.model.ApiCategory
@@ -26,6 +28,7 @@ import com.example.model.MediaItem
 import com.example.model.MediaType
 import com.example.model.NovelItem
 import com.example.model.PlatformBrand
+import com.example.model.RemoteAppConfig
 import com.example.model.ShortReelItem
 import com.example.model.StaffMember
 import com.example.model.StreamResource
@@ -90,6 +93,7 @@ data class MuvioUiState(
     val watchlistIds: Set<String> = emptySet(),
     val watchHistoryIds: List<String> = emptyList(),
     val watchProgressByMedia: Map<String, Float> = emptyMap(),
+    val watchPositionMsByEpisode: Map<String, Long> = emptyMap(),
     val selectedMood: String = "All",
     val surprisePick: MediaItem? = null,
     val sleepTimerMinutes: Int = 0,
@@ -126,9 +130,14 @@ data class MuvioUiState(
     val apiStatusMessage: String = "Connecting...",
     val secondarySourceError: String? = null,
     val autoPlayNext: Boolean = true,
-    val wifiOnlyDownloads: Boolean = true,
+    val wifiOnlyDownloads: Boolean = false,
     val preferredQuality: String = "1080p HD",
     val subtitleSize: String = "Medium",
+    val remoteConfig: RemoteAppConfig = RemoteAppConfig(),
+    val isRemoteConfigSynced: Boolean = false,
+    val isCheckingUpdates: Boolean = false,
+    val showUpdateDialog: Boolean = false,
+    val isAnnouncementDismissed: Boolean = false,
     val snackMessage: String? = null
 )
 
@@ -136,6 +145,7 @@ class MuvioViewModel(
     private val repository: MuvioCatalogRepository = MuvioSeedRepository(),
     private val apiClient: MovieBoxApiClient = MovieBoxApiClient(),
     private val secondaryApiClient: SecondaryCatalogApiClient = SecondaryCatalogApiClient(),
+    private val remoteConfigClient: MuvioRemoteConfigClient = MuvioRemoteConfigClient(),
     private val preferencesStore: MuvioPreferencesStore? = null,
     private val downloadEngine: MuvioDownloadEngine? = null
 ) : ViewModel() {
@@ -149,6 +159,7 @@ class MuvioViewModel(
     private var streamJob: Job? = null
     private var browseJob: Job? = null
     private var staffJob: Job? = null
+    private var hasAutoRetriedColdStart: Boolean = false
     private val downloadJobs = mutableMapOf<String, Job>()
     private val lastSyncedProgressByMedia = mutableMapOf<String, Float>()
 
@@ -157,6 +168,7 @@ class MuvioViewModel(
         observePersistedSettings()
         restorePersistedDownloads()
         refreshStorageStats()
+        fetchRemoteConfig(userInitiated = false)
         refreshHomeFeed()
     }
 
@@ -205,6 +217,7 @@ class MuvioViewModel(
             it.copy(
                 watchHistoryIds = emptyList(),
                 watchProgressByMedia = emptyMap(),
+                watchPositionMsByEpisode = emptyMap(),
                 snackMessage = "Watch history cleared"
             )
         }
@@ -217,6 +230,12 @@ class MuvioViewModel(
         val store = preferencesStore ?: return
         viewModelScope.launch {
             store.settingsFlow.collect { saved ->
+                if (saved.cachedMovieBoxBaseUrl.startsWith("https://") && apiClient.runtimeBaseUrlOverride.isBlank()) {
+                    apiClient.runtimeBaseUrlOverride = saved.cachedMovieBoxBaseUrl
+                }
+                if (saved.cachedSecondaryBaseUrl.startsWith("https://") && secondaryApiClient.runtimeBaseUrlOverride.isBlank()) {
+                    secondaryApiClient.runtimeBaseUrlOverride = saved.cachedSecondaryBaseUrl
+                }
                 _uiState.update { state ->
                     val existingIds = state.allMedia.mapTo(mutableSetOf()) { it.id }
                     val missingWatchlist = saved.watchlist.filter { it.id !in existingIds }
@@ -226,11 +245,18 @@ class MuvioViewModel(
                     val missingMedia = missingWatchlist + missingHistory
 
                     val mergedProgress = state.watchProgressByMedia.toMutableMap()
+                    val mergedPositions = state.watchPositionMsByEpisode.toMutableMap()
                     val mergedSeasons = state.selectedSeasonByMedia.toMutableMap()
                     val mergedEpisodes = state.selectedEpisodeByMedia.toMutableMap()
                     saved.history.forEach { entry ->
-                        mergedProgress.putIfAbsent(entry.media.id, entry.progress)
-                        lastSyncedProgressByMedia.putIfAbsent(entry.media.id, entry.progress)
+                        if (entry.progress > 0f) {
+                            mergedProgress.putIfAbsent(entry.media.id, entry.progress)
+                            lastSyncedProgressByMedia.putIfAbsent(entry.media.id, entry.progress)
+                        }
+                        val epKey = "${entry.media.id}_s${entry.lastSeason.coerceAtLeast(1)}_e${entry.lastEpisode.coerceAtLeast(1)}"
+                        if (entry.positionMs >= 45_000L) {
+                            mergedPositions.putIfAbsent(epKey, entry.positionMs)
+                        }
                         if (entry.lastSeason >= 1) mergedSeasons.putIfAbsent(entry.media.id, entry.lastSeason)
                         if (entry.lastEpisode >= 1) mergedEpisodes.putIfAbsent(entry.media.id, entry.lastEpisode)
                     }
@@ -252,6 +278,7 @@ class MuvioViewModel(
                         watchlistIds = saved.watchlist.mapTo(mutableSetOf()) { it.id },
                         watchHistoryIds = saved.history.map { it.media.id }.take(30),
                         watchProgressByMedia = mergedProgress,
+                        watchPositionMsByEpisode = mergedPositions,
                         selectedSeasonByMedia = mergedSeasons,
                         selectedEpisodeByMedia = mergedEpisodes,
                         commentsByMedia = nextComments,
@@ -260,6 +287,93 @@ class MuvioViewModel(
                 }
             }
         }
+    }
+
+    fun fetchRemoteConfig(userInitiated: Boolean = false) {
+        if (!remoteConfigClient.isConfigured()) {
+            if (userInitiated) {
+                _uiState.update {
+                    it.copy(
+                        isCheckingUpdates = false,
+                        snackMessage = "Muvio v${BuildConfig.VERSION_NAME} • Up to date"
+                    )
+                }
+            }
+            return
+        }
+        viewModelScope.launch {
+            if (userInitiated) {
+                _uiState.update { it.copy(isCheckingUpdates = true) }
+            }
+            remoteConfigClient.fetchRemoteConfig()
+                .onSuccess { config ->
+                    val prevPrimaryUrl = apiClient.runtimeBaseUrlOverride
+                    val prevSecondaryUrl = secondaryApiClient.runtimeBaseUrlOverride
+                    var urlsChanged = false
+                    if (config.movieBoxBaseUrl.startsWith("https://") &&
+                        !config.movieBoxBaseUrl.equals(prevPrimaryUrl, ignoreCase = true)
+                    ) {
+                        apiClient.runtimeBaseUrlOverride = config.movieBoxBaseUrl
+                        urlsChanged = true
+                    }
+                    if (config.secondaryCatalogBaseUrl.startsWith("https://") &&
+                        !config.secondaryCatalogBaseUrl.equals(prevSecondaryUrl, ignoreCase = true)
+                    ) {
+                        secondaryApiClient.runtimeBaseUrlOverride = config.secondaryCatalogBaseUrl
+                        urlsChanged = true
+                    }
+                    if (config.movieBoxBaseUrl.isNotBlank() || config.secondaryCatalogBaseUrl.isNotBlank()) {
+                        preferencesStore?.saveRemoteBaseUrls(
+                            config.movieBoxBaseUrl,
+                            config.secondaryCatalogBaseUrl
+                        )
+                    }
+                    val hasUpdate = config.latestVersionCode > BuildConfig.VERSION_CODE &&
+                        config.updateUrl.startsWith("https://")
+                    _uiState.update { state ->
+                        val updatedHero = if (state.allMedia.isNotEmpty()) {
+                            buildTrendingHeroMix(state.heroItems, state.allMedia, config)
+                        } else {
+                            state.heroItems
+                        }
+                        state.copy(
+                            remoteConfig = config,
+                            isRemoteConfigSynced = true,
+                            isCheckingUpdates = false,
+                            showUpdateDialog = hasUpdate,
+                            isAnnouncementDismissed = if (config.announcementText != state.remoteConfig.announcementText) false else state.isAnnouncementDismissed,
+                            heroItems = updatedHero,
+                            snackMessage = when {
+                                userInitiated && hasUpdate -> "নতুন আপডেট পাওয়া গেছে (v${config.latestVersionName})"
+                                userInitiated -> "আপনার অ্যাপ সর্বশেষ ভার্সনে (v${BuildConfig.VERSION_NAME}) আছে!"
+                                else -> state.snackMessage
+                            }
+                        )
+                    }
+                    if (urlsChanged && _uiState.value.allMedia.isEmpty()) {
+                        refreshHomeFeed()
+                    }
+                }
+                .onFailure {
+                    if (userInitiated) {
+                        _uiState.update {
+                            it.copy(
+                                isCheckingUpdates = false,
+                                snackMessage = "অনলাইন আপডেট চেক করা যায়নি, ইন্টারনেট চেক করুন।"
+                            )
+                        }
+                    }
+                }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        if (_uiState.value.remoteConfig.forceUpdate) return
+        _uiState.update { it.copy(showUpdateDialog = false) }
+    }
+
+    fun dismissAnnouncement() {
+        _uiState.update { it.copy(isAnnouncementDismissed = true) }
     }
 
     private fun loadInitialData() {
@@ -273,7 +387,10 @@ class MuvioViewModel(
         }
     }
 
-    fun refreshHomeFeed() {
+    fun refreshHomeFeed(isAutoColdStartRetry: Boolean = false) {
+        if (!isAutoColdStartRetry) {
+            hasAutoRetriedColdStart = false
+        }
         val primaryConfigured = apiClient.isApiKeyConfigured()
         val secondaryConfigured = secondaryApiClient.isConfigured()
 
@@ -284,7 +401,7 @@ class MuvioViewModel(
                     isApiConnected = false,
                     isApiKeyConfigured = false,
                     isSecondaryApiConfigured = false,
-                    apiStatusMessage = "AI Studio Secrets প্যানেলে MOVIEBOX_API_KEY ও SECONDARY_CATALOG_API_KEY যোগ করুন।"
+                    apiStatusMessage = "সার্ভার সাময়িকভাবে বন্ধ আছে। কিছুক্ষণ পর আবার চেষ্টা করুন।"
                 )
             }
             return
@@ -295,18 +412,20 @@ class MuvioViewModel(
                 isLoadingHome = true,
                 isApiKeyConfigured = primaryConfigured,
                 isSecondaryApiConfigured = secondaryConfigured,
-                apiStatusMessage = "Syncing Multi-Source Live Feed..."
+                apiStatusMessage = if (isAutoColdStartRetry) {
+                    "সার্ভার চালু হচ্ছে... স্বয়ংক্রিয়ভাবে আবার চেষ্টা করা হচ্ছে"
+                } else {
+                    "Syncing Live BD, India & Global Cinema..."
+                }
             )
         }
 
-        // Source 2: CinePulse HD API v1 (runs in parallel with Source 1 for 50/50 Home blending)
+        // Source 2: MovieLink BD API v1 (runs in parallel with Source 1 for 50/50 Home blending)
         if (secondaryConfigured) {
             fetchSecondaryHomePages(primaryConfigured)
         } else {
             _uiState.update {
-                it.copy(
-                    secondarySourceError = "Add SECONDARY_CATALOG_API_KEY in AI Studio Secrets panel to enable Source 2."
-                )
+                it.copy(secondarySourceError = null)
             }
         }
 
@@ -318,12 +437,12 @@ class MuvioViewModel(
                 .onSuccess { feed ->
                     if (feed.allItems.isNotEmpty()) {
                         _uiState.update { state ->
-                            val rawMerged = (feed.allItems + state.allMedia.filter { it.poster.remoteUrl != null }).distinctBy { it.id }
+                            val rawMerged = (feed.allItems + state.allMedia).distinctBy { it.id }
                             val mergedMedia = interleaveSources5050(rawMerged)
                             state.copy(
                                 isLoadingHome = false,
                                 isApiConnected = true,
-                                heroItems = buildTrendingHeroMix(feed.heroItems, mergedMedia),
+                                heroItems = buildTrendingHeroMix(feed.heroItems, mergedMedia, state.remoteConfig),
                                 allMedia = mergedMedia,
                                 liveSections = feed.sections,
                                 apiStatusMessage = "Connected • ${mergedMedia.size} live titles synced"
@@ -340,9 +459,28 @@ class MuvioViewModel(
                     }
                 }
                 .onFailure { err ->
+                    val errText = err.message.orEmpty()
+                    val isColdStartError = err is java.net.SocketTimeoutException ||
+                        err is java.net.ConnectException ||
+                        errText.contains("502") || errText.contains("503") || errText.contains("504") ||
+                        errText.contains("timeout", ignoreCase = true)
+
+                    if (isColdStartError && !hasAutoRetriedColdStart && _uiState.value.allMedia.isEmpty()) {
+                        hasAutoRetriedColdStart = true
+                        _uiState.update {
+                            it.copy(
+                                isLoadingHome = true,
+                                apiStatusMessage = "সার্ভার চালু হচ্ছে... স্বয়ংক্রিয়ভাবে আবার চেষ্টা করা হচ্ছে"
+                            )
+                        }
+                        delay(2_500L)
+                        refreshHomeFeed(isAutoColdStartRetry = true)
+                        return@launch
+                    }
+
                     val message = when (err) {
-                        is ApiKeyMissingException -> "Add MOVIEBOX_API_KEY in AI Studio Secrets panel."
-                        else -> "Live sync unavailable (${err.message?.take(45) ?: "Network"}). Tap Retry."
+                        is ApiKeyMissingException -> "সার্ভার সাময়িকভাবে পাওয়া যাচ্ছে না। পরে আবার চেষ্টা করুন।"
+                        else -> "সার্ভার কানেক্ট হতে সময় নিচ্ছে। নিচের Retry বাটনে ট্যাপ করুন।"
                     }
                     _uiState.update { state ->
                         state.copy(
@@ -354,7 +492,32 @@ class MuvioViewModel(
                 }
         }
 
-        // 2. Defer non-critical catalog/enrichment calls so Home feeds & posters get full bandwidth first
+        // 2. Defer non-critical catalog & South Asia regional enrichment so Home posters load smoothly
+        viewModelScope.launch {
+            delay(800L)
+            listOf("/bengali" to "bengali", "/bollywood" to "bollywood").forEach { (path, regionTag) ->
+                launch {
+                    apiClient.fetchCatalog(path, page = 1).onSuccess { regional ->
+                        if (regional.isNotEmpty()) {
+                            val tagged = regional.map { item ->
+                                item.copy(
+                                    country = item.country.ifBlank { if (regionTag == "bengali") "Bangladesh" else "India" },
+                                    languageBadge = item.languageBadge ?: if (regionTag == "bengali") "Bengali" else "Hindi",
+                                    sectionTags = (item.sectionTags + regionTag + "south_asia").distinct()
+                                )
+                            }
+                            _uiState.update { state ->
+                                val merged = interleaveSources5050((state.allMedia + tagged).distinctBy { it.id })
+                                state.copy(
+                                    allMedia = merged,
+                                    heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             delay(1_100L)
             apiClient.fetchCatalog("/type/movies", page = 1).onSuccess { movies ->
@@ -363,7 +526,7 @@ class MuvioViewModel(
                         val merged = interleaveSources5050((state.allMedia + movies).distinctBy { it.id })
                         state.copy(
                             allMedia = merged,
-                            heroItems = buildTrendingHeroMix(state.heroItems, merged)
+                            heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
                         )
                     }
                 }
@@ -377,7 +540,7 @@ class MuvioViewModel(
                         val merged = interleaveSources5050((state.allMedia + series).distinctBy { it.id })
                         state.copy(
                             allMedia = merged,
-                            heroItems = buildTrendingHeroMix(state.heroItems, merged)
+                            heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
                         )
                     }
                 }
@@ -397,7 +560,7 @@ class MuvioViewModel(
                         val merged = interleaveSources5050((state.allMedia + taggedAnime).distinctBy { it.id })
                         state.copy(
                             allMedia = merged,
-                            heroItems = buildTrendingHeroMix(state.heroItems, merged)
+                            heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
                         )
                     }
                 }
@@ -659,11 +822,7 @@ class MuvioViewModel(
 
     private fun fetchSecondaryHomePages(primaryConfigured: Boolean) {
         if (!secondaryApiClient.isConfigured()) {
-            _uiState.update {
-                it.copy(
-                    secondarySourceError = "Add SECONDARY_CATALOG_API_KEY in AI Studio Secrets panel to enable Source 2."
-                )
-            }
+            _uiState.update { it.copy(secondarySourceError = null) }
             return
         }
         viewModelScope.launch {
@@ -720,18 +879,24 @@ class MuvioViewModel(
                     }
                 }
         }
-        // Enrich 50/50 shelves after initial Home posters begin loading
-        listOf("/anime", "/drama", "/language/bangla", "/bollywood").forEachIndexed { idx, catPath ->
+        // Enrich 50/50 shelves with BD, India, South Indian, Drama & Anime catalogs
+        listOf("/language/bangla", "/bollywood", "/southIndian", "/drama", "/anime").forEachIndexed { idx, catPath ->
             viewModelScope.launch {
-                delay(1_150L + idx * 120L)
+                delay(900L + idx * 140L)
                 secondaryApiClient.fetchCatalog(path = catPath, page = 1).onSuccess { catItems ->
                     if (catItems.isNotEmpty()) {
+                        val isRegional = catPath in listOf("/language/bangla", "/bollywood", "/southIndian")
+                        val enriched = if (isRegional) {
+                            catItems.map { it.copy(sectionTags = (it.sectionTags + "south_asia").distinct()) }
+                        } else {
+                            catItems
+                        }
                         _uiState.update { state ->
-                            val merged = interleaveSources5050((state.allMedia + catItems).distinctBy { it.id })
+                            val merged = interleaveSources5050((state.allMedia + enriched).distinctBy { it.id })
                             state.copy(
                                 secondarySourceError = null,
                                 allMedia = merged,
-                                heroItems = buildTrendingHeroMix(state.heroItems, merged)
+                                heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
                             )
                         }
                     }
@@ -795,21 +960,84 @@ class MuvioViewModel(
         return out
     }
 
+    internal fun isSouthAsiaRegional(
+        item: MediaItem,
+        config: RemoteAppConfig = _uiState.value.remoteConfig
+    ): Boolean {
+        if (item.sectionTags.any { it in listOf("bengali", "bollywood", "south_indian", "south_asia") }) {
+            return true
+        }
+        val haystack = buildString {
+            append(item.country).append(' ')
+            append(item.languageBadge.orEmpty()).append(' ')
+            append(item.subCategory).append(' ')
+            append(item.genre).append(' ')
+            append(item.title)
+        }.lowercase()
+        val keywords = (config.priorityRegions + listOf(
+            "bangladesh", "bengali", "bangla", "kolkata", "dhaka",
+            "india", "indian", "hindi", "bollywood", "tollywood",
+            "south indian", "tamil", "telugu", "malayalam", "kannada",
+            "punjabi", "marathi", "pakistan", "pakistani", "nepali",
+            "hoichoi", "chorki", "bongo", "zee5"
+        )).map { it.lowercase() }.distinct()
+        return keywords.any { kw -> kw.length >= 3 && haystack.contains(kw) }
+    }
+
+    fun southAsiaTrendingItems(): List<MediaItem> {
+        val state = _uiState.value
+        val regional = state.allMedia.filter { isSouthAsiaRegional(it, state.remoteConfig) }
+        val sortedRegional = regional.sortedByDescending { item ->
+            val bdBoost = if (item.languageBadge.equals("Bengali", true) ||
+                item.country.contains("Bangladesh", true) ||
+                "bengali" in item.sectionTags
+            ) 2.0 else 0.0
+            val yearBoost = if (item.year >= 2024) 1.5 else 0.0
+            bdBoost + yearBoost + (item.rating / 10.0)
+        }
+        return interleaveSources5050(sortedRegional).take(16)
+    }
+
     internal fun buildTrendingHeroMix(
         baseHero: List<MediaItem>,
-        allMedia: List<MediaItem>
+        allMedia: List<MediaItem>,
+        config: RemoteAppConfig = _uiState.value.remoteConfig
     ): List<MediaItem> {
         val pool = interleaveSources5050((baseHero + allMedia).distinctBy { it.id })
             .filter { !it.backdropUrl.isNullOrBlank() || !it.poster.remoteUrl.isNullOrBlank() }
         if (pool.isEmpty()) return baseHero
 
+        val interleaved = mutableListOf<MediaItem>()
+        val seenIds = mutableSetOf<String>()
+        val maxSlots = 12
+
+        // 1. Remote-curated Featured Banner Titles (instant online override via Remote Config JSON)
+        if (config.featuredBannerTitles.isNotEmpty()) {
+            config.featuredBannerTitles.forEach { featuredTitle ->
+                val match = pool.firstOrNull {
+                    it.title.contains(featuredTitle, ignoreCase = true)
+                }
+                if (match != null && interleaved.size < maxSlots && seenIds.add(match.id)) {
+                    interleaved += match
+                }
+            }
+        }
+
+        // 2. Auto-prioritize Trending BD, India & South Asia hits (50/50 MovieBox + MovieLink BD)
+        val regionalHits = interleaveSources5050(
+            pool.filter { isSouthAsiaRegional(it, config) }
+        )
+        regionalHits.take(6).forEach { regional ->
+            if (interleaved.size < maxSlots && seenIds.add(regional.id)) {
+                interleaved += regional
+            }
+        }
+
+        // 3. Fill remaining Hero slots with top global Movies, Series & Anime interleaved 50/50
         val trendingMovies = interleaveSources5050(pool.filter { it.mediaType == MediaType.MOVIE })
         val trendingSeries = interleaveSources5050(pool.filter { it.mediaType == MediaType.SERIES || it.mediaType == MediaType.DRAMA })
         val trendingAnime = interleaveSources5050(pool.filter { it.mediaType == MediaType.ANIME || "anime" in it.sectionTags })
 
-        val interleaved = mutableListOf<MediaItem>()
-        val seenIds = mutableSetOf<String>()
-        val maxSlots = 12
         var idx = 0
         while (interleaved.size < maxSlots && idx < 6) {
             listOf(trendingMovies, trendingSeries, trendingAnime).forEach { bucket ->
@@ -827,7 +1055,7 @@ class MuvioViewModel(
             if (interleaved.size >= 10) break
             if (seenIds.add(item.id)) interleaved += item
         }
-        return interleaveSources5050(interleaved)
+        return interleaved
     }
 
     fun requestAdultAccess(category: ApiCategory? = null): Boolean {
@@ -1119,6 +1347,7 @@ class MuvioViewModel(
             return
         }
         val list = state.liveSections[sectionTitle] ?: when (sectionTitle) {
+            "Trending in BD & South Asia" -> southAsiaTrendingItems()
             "Trending Movies" -> state.allMedia.filter { it.mediaType == MediaType.MOVIE }
             "Trending TV Series" -> state.allMedia.filter {
                 it.mediaType == MediaType.SERIES || it.mediaType == MediaType.DRAMA || it.mediaType == MediaType.ANIME
@@ -1197,6 +1426,15 @@ class MuvioViewModel(
     }
 
     fun openMediaDetail(media: MediaItem) {
+        // Ensure the opened item is immediately registered in allMedia so DetailPlayerScreen
+        // never misses getMediaById() and never falls back to another movie.
+        _uiState.update { state ->
+            if (state.allMedia.any { it.id == media.id }) {
+                state
+            } else {
+                state.copy(allMedia = listOf(media) + state.allMedia)
+            }
+        }
         recordWatchHistory(media.id)
 
         // Strict Source Isolation: Source 2 items ONLY fetch details, episodes & streams from SecondaryCatalogApiClient
@@ -1699,22 +1937,36 @@ class MuvioViewModel(
                     streamErrorByMedia = it.streamErrorByMedia - media.id
                 )
             }
+            // Verify the alternate server actually has a closely matching title before fetching
+            // streams, preventing fuzzy title searches from swapping to a completely different movie.
             val backupStreams = if (tryPrimaryBackup) {
-                apiClient.fetchStreams(
-                    title = media.title,
-                    season = season,
-                    episode = episode,
-                    isSeries = isSeries
-                ).getOrNull().orEmpty()
+                val matchedPrimary = apiClient.searchMedia(media.title).getOrNull().orEmpty()
+                    .firstOrNull { isStrictTitleMatch(media.title, it.title) }
+                if (matchedPrimary != null) {
+                    apiClient.fetchStreams(
+                        title = matchedPrimary.title,
+                        season = season,
+                        episode = episode,
+                        isSeries = isSeries
+                    ).getOrNull().orEmpty()
+                } else {
+                    emptyList()
+                }
             } else {
-                secondaryApiClient.fetchStreams(
-                    detailPath = "",
-                    title = media.title,
-                    season = season,
-                    episode = episode,
-                    isSeries = isSeries,
-                    fallbackLanguage = media.languageBadge ?: "Original"
-                ).getOrNull().orEmpty()
+                val matchedSecondary = secondaryApiClient.searchMedia(media.title).getOrNull().orEmpty()
+                    .firstOrNull { isStrictTitleMatch(media.title, it.title) }
+                if (matchedSecondary != null) {
+                    secondaryApiClient.fetchStreams(
+                        detailPath = matchedSecondary.sourceDetailPath,
+                        title = matchedSecondary.title,
+                        season = season,
+                        episode = episode,
+                        isSeries = isSeries,
+                        fallbackLanguage = media.languageBadge ?: "Original"
+                    ).getOrNull().orEmpty()
+                } else {
+                    emptyList()
+                }
             }
 
             _uiState.update { current ->
@@ -1743,6 +1995,29 @@ class MuvioViewModel(
                 }
             }
         }
+    }
+
+    private fun isStrictTitleMatch(requestedTitle: String, candidateTitle: String): Boolean {
+        fun normalize(raw: String): String = raw
+            .replace(Regex("\\([^)]*\\)"), " ")
+            .replace(Regex("\\[[^]]*]"), " ")
+            .replace(Regex("(?i)\\b(season|s0?\\d{1,2}|ep\\s*\\d+|hindi|bengali|bangla|dubbed|dual audio|4k|1080p|720p|hd)\\b"), " ")
+            .lowercase()
+            .replace(Regex("[^a-z0-9\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        val a = normalize(requestedTitle)
+        val b = normalize(candidateTitle)
+        if (a.isBlank() || b.isBlank()) return false
+        if (a == b) return true
+        val tokensA = a.split(' ').filter { it.length >= 2 }.toSet()
+        val tokensB = b.split(' ').filter { it.length >= 2 }.toSet()
+        if (tokensA.isEmpty() || tokensB.isEmpty()) return false
+        val overlap = tokensA.intersect(tokensB).size
+        val minSize = minOf(tokensA.size, tokensB.size)
+        val maxSize = maxOf(tokensA.size, tokensB.size)
+        return overlap == minSize && (maxSize - minSize) <= 1
     }
 
     internal fun choosePreferredStreamIndex(streams: List<StreamResource>, preferredQuality: String): Int {
@@ -2055,11 +2330,14 @@ class MuvioViewModel(
         }
         val store = preferencesStore ?: return
         val media = getMediaById(mediaId) ?: return
-        val progress = _uiState.value.watchProgressByMedia[mediaId] ?: 0.06f
-        val season = _uiState.value.selectedSeasonByMedia[mediaId] ?: 1
-        val episode = _uiState.value.selectedEpisodeByMedia[mediaId] ?: 1
+        val state = _uiState.value
+        val progress = state.watchProgressByMedia[mediaId] ?: 0f
+        val season = state.selectedSeasonByMedia[mediaId] ?: 1
+        val episode = state.selectedEpisodeByMedia[mediaId] ?: 1
+        val epKey = "${mediaId}_s${season}_e${episode}"
+        val positionMs = state.watchPositionMsByEpisode[epKey] ?: 0L
         viewModelScope.launch {
-            store.upsertHistory(media, progress, season, episode)
+            store.upsertHistory(media, progress, season, episode, positionMs)
         }
     }
 
@@ -2131,7 +2409,10 @@ class MuvioViewModel(
                 allMedia = updatedAll,
                 seasonEpisodesByMedia = state.seasonEpisodesByMedia + (media.id to updatedMap),
                 selectedSeasonByMedia = state.selectedSeasonByMedia + (media.id to season),
-                selectedEpisodeByMedia = state.selectedEpisodeByMedia + (media.id to 1)
+                selectedEpisodeByMedia = state.selectedEpisodeByMedia + (media.id to 1),
+                streamsByMedia = state.streamsByMedia - media.id,
+                streamErrorByMedia = state.streamErrorByMedia - media.id,
+                selectedStreamIndexByMedia = state.selectedStreamIndexByMedia + (media.id to 0)
             )
         }
         fetchStreamsForMedia(media, season, 1)
@@ -2140,7 +2421,12 @@ class MuvioViewModel(
     fun selectEpisode(media: MediaItem, episodeNumber: Int) {
         val season = _uiState.value.selectedSeasonByMedia[media.id] ?: 1
         _uiState.update { state ->
-            state.copy(selectedEpisodeByMedia = state.selectedEpisodeByMedia + (media.id to episodeNumber))
+            state.copy(
+                selectedEpisodeByMedia = state.selectedEpisodeByMedia + (media.id to episodeNumber),
+                streamsByMedia = state.streamsByMedia - media.id,
+                streamErrorByMedia = state.streamErrorByMedia - media.id,
+                selectedStreamIndexByMedia = state.selectedStreamIndexByMedia + (media.id to 0)
+            )
         }
         fetchStreamsForMedia(media, season, episodeNumber)
     }
@@ -2250,21 +2536,13 @@ class MuvioViewModel(
         }
 
         val availableStreams = currentState.streamsByMedia[media.id].orEmpty().ifEmpty { media.resources }
-        val chosenStream = availableStreams.firstOrNull {
-            it.quality.contains(chosenQuality.substringBefore(" "), ignoreCase = true) &&
-                !it.streamUrl.contains(".m3u8", ignoreCase = true) &&
-                !it.streamUrl.contains("/api/hls/", ignoreCase = true)
-        } ?: availableStreams.firstOrNull {
-            it.streamUrl.isNotBlank() &&
-                !it.streamUrl.contains(".m3u8", ignoreCase = true) &&
-                !it.streamUrl.contains("/api/hls/", ignoreCase = true)
-        } ?: availableStreams.firstOrNull()
+        val chosenStream = selectDirectDownloadStream(availableStreams, chosenQuality)
 
         val item = DownloadItem(
             mediaId = media.id,
             title = displayTitle,
             quality = chosenQuality,
-            sizeText = if (engine == null) "Queued" else "Connecting...",
+            sizeText = if (engine == null) "Queued" else "Finding MP4...",
             progress = 0.02f,
             status = DownloadStatus.DOWNLOADING,
             poster = media.poster,
@@ -2286,6 +2564,22 @@ class MuvioViewModel(
         }
     }
 
+    private fun isHlsStream(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains(".m3u8") || lower.contains("/api/hls/")
+    }
+
+    private fun selectDirectDownloadStream(
+        streams: List<StreamResource>,
+        chosenQuality: String
+    ): StreamResource? {
+        val directMp4s = streams.filter { it.streamUrl.isNotBlank() && !isHlsStream(it.streamUrl) }
+        if (directMp4s.isEmpty()) return null
+        return directMp4s.firstOrNull {
+            it.quality.contains(chosenQuality.substringBefore(" "), ignoreCase = true)
+        } ?: directMp4s.firstOrNull()
+    }
+
     private fun launchRealDownload(
         media: MediaItem,
         downloadId: String,
@@ -2297,46 +2591,61 @@ class MuvioViewModel(
         val engine = downloadEngine ?: return
         downloadJobs[downloadId]?.cancel()
         downloadJobs[downloadId] = viewModelScope.launch {
-            var targetStream = initialStream
-            if (targetStream == null || targetStream.streamUrl.isBlank()) {
-                val fetched = if (media.contentSource == ContentSource.SECONDARY && secondaryApiClient.isConfigured()) {
-                    secondaryApiClient.fetchStreams(
+            var targetStream = initialStream?.takeIf { it.streamUrl.isNotBlank() && !isHlsStream(it.streamUrl) }
+            val isSeries = media.mediaType != MediaType.MOVIE
+
+            // If no direct MP4 yet, query primary & backup source so HLS-only items still find an MP4 if available
+            if (targetStream == null) {
+                val primaryFirst = media.contentSource != ContentSource.SECONDARY
+                if (primaryFirst && apiClient.isApiKeyConfigured()) {
+                    val s1 = apiClient.fetchStreams(media.title, season, episode, isSeries).getOrNull().orEmpty()
+                    targetStream = selectDirectDownloadStream(s1, chosenQuality)
+                } else if (!primaryFirst && secondaryApiClient.isConfigured()) {
+                    val s2 = secondaryApiClient.fetchStreams(
                         detailPath = media.sourceDetailPath,
                         title = media.title,
                         season = season,
                         episode = episode,
-                        isSeries = media.mediaType != MediaType.MOVIE,
+                        isSeries = isSeries,
                         fallbackLanguage = media.languageBadge ?: "Original"
                     ).getOrNull().orEmpty()
-                } else if (apiClient.isApiKeyConfigured()) {
-                    apiClient.fetchStreams(
-                        title = media.title,
-                        season = season,
-                        episode = episode,
-                        isSeries = media.mediaType != MediaType.MOVIE
-                    ).getOrNull().orEmpty()
-                } else {
-                    emptyList()
+                    targetStream = selectDirectDownloadStream(s2, chosenQuality)
                 }
-                targetStream = fetched.firstOrNull {
-                    it.quality.contains(chosenQuality.substringBefore(" "), ignoreCase = true) &&
-                        !it.streamUrl.contains(".m3u8", true)
-                } ?: fetched.firstOrNull { !it.streamUrl.contains(".m3u8", true) }
-                    ?: fetched.firstOrNull()
+
+                // Cross-source fallback for MP4 download
+                if (targetStream == null) {
+                    if (primaryFirst && secondaryApiClient.isConfigured()) {
+                        val s2Backup = secondaryApiClient.fetchStreams(
+                            detailPath = "",
+                            title = media.title,
+                            season = season,
+                            episode = episode,
+                            isSeries = isSeries,
+                            fallbackLanguage = media.languageBadge ?: "Original"
+                        ).getOrNull().orEmpty()
+                        targetStream = selectDirectDownloadStream(s2Backup, chosenQuality)
+                    } else if (!primaryFirst && apiClient.isApiKeyConfigured()) {
+                        val s1Backup = apiClient.fetchStreams(media.title, season, episode, isSeries).getOrNull().orEmpty()
+                        targetStream = selectDirectDownloadStream(s1Backup, chosenQuality)
+                    }
+                }
             }
 
             if (targetStream == null || targetStream.streamUrl.isBlank()) {
                 updateDownloadState(downloadId) {
                     it.copy(
                         status = DownloadStatus.FAILED,
-                        sizeText = "No direct MP4 stream found",
+                        sizeText = "শুধুমাত্র অনলাইন স্ট্রিমিং (HLS) পাওয়া গেছে, অফলাইন MP4 নেই",
                         progress = 0f
                     )
+                }
+                _uiState.update {
+                    it.copy(snackMessage = "এই ভিডিওটি শুধুমাত্র অনলাইন স্ট্রিমিং (HLS) সাপোর্ট করে, অফলাইন MP4 পাওয়া যায়নি।")
                 }
                 return@launch
             }
 
-            updateDownloadState(downloadId) { it.copy(streamUrl = targetStream.streamUrl) }
+            updateDownloadState(downloadId) { it.copy(streamUrl = targetStream.streamUrl, sizeText = "Connecting...") }
 
             val result = engine.downloadVideo(
                 downloadId = downloadId,
@@ -2513,20 +2822,41 @@ class MuvioViewModel(
         _uiState.update { it.copy(surprisePick = null) }
     }
 
-    fun updateWatchProgress(mediaId: String, progress: Float) {
-        val clamped = progress.coerceIn(0.05f, 0.98f)
+    fun updateWatchProgress(
+        mediaId: String,
+        progress: Float,
+        positionMs: Long = 0L,
+        durationMs: Long = 0L
+    ) {
+        val clamped = progress.coerceIn(0f, 1f)
+        val season = _uiState.value.selectedSeasonByMedia[mediaId] ?: 1
+        val episode = _uiState.value.selectedEpisodeByMedia[mediaId] ?: 1
+        val epKey = "${mediaId}_s${season}_e${episode}"
+        val isNearEnd = durationMs > 0L && (positionMs >= durationMs - 30_000L || clamped >= 0.94f)
+        val resumablePosMs = if (!isNearEnd && positionMs >= 45_000L) positionMs else 0L
+
         _uiState.update { state ->
-            state.copy(watchProgressByMedia = state.watchProgressByMedia + (mediaId to clamped))
+            val updatedPositions = if (resumablePosMs > 0L) {
+                state.watchPositionMsByEpisode + (epKey to resumablePosMs)
+            } else {
+                state.watchPositionMsByEpisode - epKey
+            }
+            state.copy(
+                watchProgressByMedia = state.watchProgressByMedia + (mediaId to clamped),
+                watchPositionMsByEpisode = updatedPositions
+            )
         }
         val store = preferencesStore ?: return
         val lastSynced = lastSyncedProgressByMedia[mediaId]
-        if (lastSynced == null || kotlin.math.abs(clamped - lastSynced) >= 0.05f || clamped >= 0.95f) {
+        val shouldSync = lastSynced == null ||
+            kotlin.math.abs(clamped - lastSynced) >= 0.03f ||
+            isNearEnd ||
+            (resumablePosMs >= 45_000L && lastSynced == 0f)
+        if (shouldSync) {
             lastSyncedProgressByMedia[mediaId] = clamped
             val media = getMediaById(mediaId) ?: return
-            val season = _uiState.value.selectedSeasonByMedia[mediaId] ?: 1
-            val episode = _uiState.value.selectedEpisodeByMedia[mediaId] ?: 1
             viewModelScope.launch {
-                store.upsertHistory(media, clamped, season, episode)
+                store.upsertHistory(media, clamped, season, episode, resumablePosMs)
             }
         }
     }
@@ -2579,7 +2909,7 @@ class MuvioViewModel(
         val byId = state.allMedia.associateBy { it.id }
         return state.watchHistoryIds.mapNotNull { id ->
             val media = byId[id] ?: return@mapNotNull null
-            val progress = state.watchProgressByMedia[id] ?: 0.08f
+            val progress = state.watchProgressByMedia[id] ?: 0f
             media to progress
         }.take(10)
     }

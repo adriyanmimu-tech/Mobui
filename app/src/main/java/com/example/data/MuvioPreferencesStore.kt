@@ -28,19 +28,22 @@ data class LocalHistoryRecord(
     val media: MediaItem,
     val progress: Float,
     val lastSeason: Int,
-    val lastEpisode: Int
+    val lastEpisode: Int,
+    val positionMs: Long = 0L
 )
 
 data class MuvioSettingsSnapshot(
     val autoPlayNext: Boolean = true,
-    val wifiOnlyDownloads: Boolean = true,
+    val wifiOnlyDownloads: Boolean = false,
     val preferredQuality: String = "1080p HD",
     val subtitleSize: String = "Medium",
     val isAdultVerified: Boolean = false,
     val recentSearches: List<String> = emptyList(),
     val watchlist: List<MediaItem> = emptyList(),
     val history: List<LocalHistoryRecord> = emptyList(),
-    val commentsByMedia: Map<String, List<CommentItem>> = emptyMap()
+    val commentsByMedia: Map<String, List<CommentItem>> = emptyMap(),
+    val cachedMovieBoxBaseUrl: String = "",
+    val cachedSecondaryBaseUrl: String = ""
 )
 
 class MuvioPreferencesStore(private val context: Context) {
@@ -55,6 +58,8 @@ class MuvioPreferencesStore(private val context: Context) {
         val WATCHLIST_JSON = stringPreferencesKey("local_watchlist_json")
         val HISTORY_JSON = stringPreferencesKey("local_history_json")
         val COMMENTS_JSON = stringPreferencesKey("local_comments_json")
+        val REMOTE_MOVIEBOX_URL = stringPreferencesKey("remote_moviebox_base_url")
+        val REMOTE_SECONDARY_URL = stringPreferencesKey("remote_secondary_base_url")
     }
 
     val settingsFlow: Flow<MuvioSettingsSnapshot> = context.muvioSettingsDataStore.data
@@ -64,14 +69,16 @@ class MuvioPreferencesStore(private val context: Context) {
         .map { prefs ->
             MuvioSettingsSnapshot(
                 autoPlayNext = prefs[Keys.AUTO_PLAY_NEXT] ?: true,
-                wifiOnlyDownloads = prefs[Keys.WIFI_ONLY_DOWNLOADS] ?: true,
+                wifiOnlyDownloads = prefs[Keys.WIFI_ONLY_DOWNLOADS] ?: false,
                 preferredQuality = prefs[Keys.PREFERRED_QUALITY] ?: "1080p HD",
                 subtitleSize = prefs[Keys.SUBTITLE_SIZE] ?: "Medium",
                 isAdultVerified = prefs[Keys.ADULT_VERIFIED] ?: false,
                 recentSearches = decodeStringList(prefs[Keys.RECENT_SEARCHES_JSON]),
                 watchlist = decodeWatchlist(prefs[Keys.WATCHLIST_JSON]),
                 history = decodeHistory(prefs[Keys.HISTORY_JSON]),
-                commentsByMedia = decodeComments(prefs[Keys.COMMENTS_JSON])
+                commentsByMedia = decodeComments(prefs[Keys.COMMENTS_JSON]),
+                cachedMovieBoxBaseUrl = prefs[Keys.REMOTE_MOVIEBOX_URL].orEmpty(),
+                cachedSecondaryBaseUrl = prefs[Keys.REMOTE_SECONDARY_URL].orEmpty()
             )
         }
 
@@ -93,6 +100,17 @@ class MuvioPreferencesStore(private val context: Context) {
 
     suspend fun setAdultVerified(verified: Boolean) {
         context.muvioSettingsDataStore.edit { it[Keys.ADULT_VERIFIED] = verified }
+    }
+
+    suspend fun saveRemoteBaseUrls(movieBoxUrl: String, secondaryUrl: String) {
+        context.muvioSettingsDataStore.edit { prefs ->
+            if (movieBoxUrl.startsWith("https://", ignoreCase = true)) {
+                prefs[Keys.REMOTE_MOVIEBOX_URL] = movieBoxUrl.trim().trimEnd('/')
+            }
+            if (secondaryUrl.startsWith("https://", ignoreCase = true)) {
+                prefs[Keys.REMOTE_SECONDARY_URL] = secondaryUrl.trim().trimEnd('/')
+            }
+        }
     }
 
     suspend fun addRecentSearch(query: String) {
@@ -125,14 +143,21 @@ class MuvioPreferencesStore(private val context: Context) {
         }
     }
 
-    suspend fun upsertHistory(media: MediaItem, progress: Float, season: Int, episode: Int) {
+    suspend fun upsertHistory(
+        media: MediaItem,
+        progress: Float,
+        season: Int,
+        episode: Int,
+        positionMs: Long = 0L
+    ) {
         context.muvioSettingsDataStore.edit { prefs ->
             val current = decodeHistory(prefs[Keys.HISTORY_JSON])
             val record = LocalHistoryRecord(
                 media = media,
-                progress = progress.coerceIn(0.05f, 0.98f),
+                progress = progress.coerceIn(0f, 1f),
                 lastSeason = season.coerceAtLeast(1),
-                lastEpisode = episode.coerceAtLeast(1)
+                lastEpisode = episode.coerceAtLeast(1),
+                positionMs = positionMs.coerceAtLeast(0L)
             )
             val updated = (listOf(record) + current.filterNot { it.media.id == media.id }).take(30)
             prefs[Keys.HISTORY_JSON] = encodeHistory(updated)
@@ -260,6 +285,7 @@ class MuvioPreferencesStore(private val context: Context) {
                     put("progress", rec.progress.toDouble())
                     put("lastSeason", rec.lastSeason)
                     put("lastEpisode", rec.lastEpisode)
+                    put("positionMs", rec.positionMs)
                 }
             )
         }
@@ -274,12 +300,21 @@ class MuvioPreferencesStore(private val context: Context) {
                 for (i in 0 until arr.length()) {
                     val obj = arr.optJSONObject(i) ?: continue
                     val media = jsonToMedia(obj) ?: continue
+                    // Legacy entries saved before positionMs tracking lack "positionMs" and had a
+                    // fake 0.05f/0.06f floor — default positionMs to 0L so they start cleanly at 00:00.
+                    val savedPosMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L)
+                    val rawProgress = if (obj.has("positionMs")) {
+                        obj.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
                     add(
                         LocalHistoryRecord(
                             media = media,
-                            progress = obj.optDouble("progress", 0.06).toFloat().coerceIn(0.05f, 0.98f),
+                            progress = rawProgress,
                             lastSeason = obj.optInt("lastSeason", 1).coerceAtLeast(1),
-                            lastEpisode = obj.optInt("lastEpisode", 1).coerceAtLeast(1)
+                            lastEpisode = obj.optInt("lastEpisode", 1).coerceAtLeast(1),
+                            positionMs = savedPosMs
                         )
                     )
                 }

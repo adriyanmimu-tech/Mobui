@@ -15,7 +15,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -112,7 +111,6 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -236,7 +234,6 @@ fun DetailPlayerScreen(
     var isPlayerLocked by remember { mutableStateOf(false) }
     var isTheaterDim by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(true) }
-    var progressFraction by remember { mutableFloatStateOf(0f) }
     var showControls by remember { mutableStateOf(true) }
     var selectedBottomTab by remember { mutableIntStateOf(0) } // 0 = For you (default), 1 = Comments
     var showInfoSheet by remember { mutableStateOf(false) }
@@ -412,7 +409,6 @@ fun DetailPlayerScreen(
                 isInPipMode = isInPipMode,
                 showControls = showControls && !isInPipMode && !isPlayerLocked,
                 initialResumePositionMs = initialResumePositionMs,
-                simulatedProgressFraction = progressFraction,
                 streamCount = availableResources.size,
                 selectedStreamIndex = selectedStreamIndex,
                 onSelectStreamIndex = onSelectStreamIndex,
@@ -440,7 +436,6 @@ fun DetailPlayerScreen(
                     if (nextEp != null) {
                         onSelectEpisode(nextEp.number)
                         isPlaying = true
-                        progressFraction = 0f
                         subtitleStatusBanner = "Playing Episode ${nextEp.number}"
                     }
                 },
@@ -460,9 +455,6 @@ fun DetailPlayerScreen(
                     }
                 },
                 onProgressReport = onProgressChange,
-                onSimulatedSeekFraction = { progressFraction = it },
-                onSimulatedRewind10 = { progressFraction = (progressFraction - 0.04f).coerceAtLeast(0f) },
-                onSimulatedForward10 = { progressFraction = (progressFraction + 0.04f).coerceAtMost(1f) },
                 onBackClick = {
                     if (isFullscreen) {
                         isFullscreen = false
@@ -662,7 +654,6 @@ fun DetailPlayerScreen(
                             onSelectEpisode = { epNum ->
                                 onSelectEpisode(epNum)
                                 isPlaying = true
-                                progressFraction = 0f
                             },
                             onOpenAllEpisodes = { showAllEpisodesSheet = true },
                             onOpenQualitySheet = { showQualitySheet = true },
@@ -910,7 +901,6 @@ fun DetailPlayerScreen(
             onSelectEpisode = { epNum ->
                 onSelectEpisode(epNum)
                 isPlaying = true
-                progressFraction = 0f
             },
             onDownloadEpisode = {
                 showAllEpisodesSheet = false
@@ -1086,7 +1076,6 @@ private fun PlayerStage(
     isInPipMode: Boolean,
     showControls: Boolean,
     initialResumePositionMs: Long,
-    simulatedProgressFraction: Float,
     streamCount: Int,
     selectedStreamIndex: Int,
     onSelectStreamIndex: (Int) -> Unit,
@@ -1104,9 +1093,6 @@ private fun PlayerStage(
     onPlaybackEnded: () -> Unit,
     onEnterPip: () -> Unit,
     onProgressReport: (Float, Long, Long) -> Unit,
-    onSimulatedSeekFraction: (Float) -> Unit,
-    onSimulatedRewind10: () -> Unit,
-    onSimulatedForward10: () -> Unit,
     onBackClick: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onHelpClick: () -> Unit
@@ -1120,6 +1106,8 @@ private fun PlayerStage(
     var resizeModeIndex by remember { mutableIntStateOf(0) } // 0=Fit, 1=Zoom, 2=Fill
     var resizePillLabel by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(false) }
+    var hasRenderedFirstFrame by remember { mutableStateOf(false) }
+    var isLongPress2x by remember { mutableStateOf(false) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var retryCounter by remember { mutableIntStateOf(0) }
     var sameStreamRetryCount by remember { mutableIntStateOf(0) }
@@ -1143,6 +1131,8 @@ private fun PlayerStage(
 
     LaunchedEffect(episodeKey) {
         hasStartedPlayingEpisode = false
+        hasRenderedFirstFrame = false
+        isLongPress2x = false
         lastKnownPositionMs = 0L
         sameStreamRetryCount = 0
         triedStreamIndices.clear()
@@ -1150,6 +1140,7 @@ private fun PlayerStage(
 
     LaunchedEffect(episodeKey, streamUrl) {
         sameStreamRetryCount = 0
+        hasRenderedFirstFrame = false
     }
 
     // Smooth vertical swipe gesture state for left=Brightness, right=Volume
@@ -1179,12 +1170,8 @@ private fun PlayerStage(
             isPlaying = isPlaying,
             sourceRect = playerBoundsRect,
             onTogglePlayPause = onTogglePlay,
-            onRewind10 = {
-                if (exoPlayer != null) exoPlayer.seekBack() else onSimulatedRewind10()
-            },
-            onForward10 = {
-                if (exoPlayer != null) exoPlayer.seekForward() else onSimulatedForward10()
-            }
+            onRewind10 = { exoPlayer?.seekBack() },
+            onForward10 = { exoPlayer?.seekForward() }
         )
     }
 
@@ -1195,6 +1182,7 @@ private fun PlayerStage(
 
         playbackError = null
         isBuffering = true
+        hasRenderedFirstFrame = false
         val sameEpisode = lastLoadedEpisodeKey == episodeKey
         val livePos = player.currentPosition.takeIf { it > 2_000L } ?: 0L
         val resumeMs = if (sameEpisode) maxOf(livePos, lastKnownPositionMs) else 0L
@@ -1208,14 +1196,16 @@ private fun PlayerStage(
 
         val builder = ExoMediaItem.Builder().setUri(streamUrl)
         val isDirectMp4 = streamUrl.contains(".mp4", ignoreCase = true) && !streamUrl.contains(".m3u8", ignoreCase = true)
-        val isHlsStream = !isDirectMp4 && (
+        val isDashStream = streamUrl.contains(".mpd", ignoreCase = true)
+        val isHlsStream = !isDirectMp4 && !isDashStream && (
             streamUrl.contains(".m3u8", ignoreCase = true) ||
                 streamUrl.contains("m3u8", ignoreCase = true) ||
                 streamUrl.contains("/api/hls/", ignoreCase = true) ||
                 activeQualityLabel.contains("HLS", ignoreCase = true)
             )
-        if (isHlsStream) {
-            builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        when {
+            isHlsStream -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+            isDashStream -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
         }
         if (activeSub != null) {
             val mime = inferSubtitleMimeType(activeSub.url)
@@ -1255,10 +1245,17 @@ private fun PlayerStage(
         }
 
         val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                hasRenderedFirstFrame = true
+                isBuffering = false
+                playbackError = null
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
+                    hasRenderedFirstFrame = true
                     val player = exoPlayer
                     val savedResumeMs = currentInitialResumeMs
                     if (player != null &&
@@ -1365,15 +1362,19 @@ private fun PlayerStage(
         }
     }
 
-    // YouTube-style Anti-Stall Auto-Switch: if a stream stays stuck buffering for > 9s continuously
-    // while another faster/lighter quality stream exists for this same video, switch automatically
-    // at the current timestamp instead of spinning forever.
-    LaunchedEffect(isBuffering, isPlaying, episodeKey, selectedStreamIndex, streamCount, streamUrl) {
-        if (!isBuffering || !isPlaying || streamUrl.isBlank() || streamCount <= 1) return@LaunchedEffect
+    // Cinema Anti-Stall & First-Frame Watchdog:
+    // If a stream stays stuck buffering or never renders a first frame for > 10s,
+    // automatically switch to the next available quality or alternate source instead of hanging black.
+    LaunchedEffect(isBuffering, hasRenderedFirstFrame, isPlaying, episodeKey, selectedStreamIndex, streamCount, streamUrl, playbackError) {
+        val waitingToPlay = (isBuffering || !hasRenderedFirstFrame) && playbackError == null
+        if (!waitingToPlay || !isPlaying || streamUrl.isBlank()) return@LaunchedEffect
         val player = exoPlayer ?: return@LaunchedEffect
         val startPos = player.currentPosition
-        delay(9_000L)
-        val stillStuck = isBuffering && isPlaying && (player.currentPosition <= startPos + 500L)
+        delay(10_000L)
+        val stillStuck = (isBuffering || !hasRenderedFirstFrame) &&
+            isPlaying &&
+            playbackError == null &&
+            (player.currentPosition <= startPos + 500L)
         if (stillStuck) {
             triedStreamIndices.add(currentSelectedStreamIndex)
             val nextIdx = (0 until currentStreamCount).firstOrNull { it !in triedStreamIndices }
@@ -1382,14 +1383,21 @@ private fun PlayerStage(
                     lastKnownPositionMs = player.currentPosition
                 }
                 currentOnSelectStreamIndex(nextIdx)
+            } else if (!hasStartedPlayingEpisode && alternateFallbackTriedEpisode != currentEpisodeKey) {
+                alternateFallbackTriedEpisode = currentEpisodeKey
+                triedStreamIndices.clear()
+                currentOnFallbackToAlternateStream()
+            } else if (!hasRenderedFirstFrame) {
+                isBuffering = false
+                playbackError = "ভিডিও লোড হতে সময় নিচ্ছে — Retry বা অন্য Quality চেষ্টা করুন"
             }
         }
     }
 
-    LaunchedEffect(isPlaying, playbackSpeed, exoPlayer) {
+    LaunchedEffect(isPlaying, playbackSpeed, isLongPress2x, exoPlayer) {
         exoPlayer?.let { player ->
             player.playWhenReady = isPlaying
-            player.setPlaybackSpeed(playbackSpeed)
+            player.setPlaybackSpeed(if (isLongPress2x) 2.0f else playbackSpeed)
         }
     }
 
@@ -1482,9 +1490,20 @@ private fun PlayerStage(
                     }
                 }
             }
-            .pointerInput(exoPlayer, isInPipMode, isLocked) {
+            .pointerInput(exoPlayer, isInPipMode, isLocked, isPlaying) {
                 if (isInPipMode) return@pointerInput
                 detectTapGestures(
+                    onPress = {
+                        tryAwaitRelease()
+                        if (isLongPress2x) {
+                            isLongPress2x = false
+                        }
+                    },
+                    onLongPress = {
+                        if (!isLocked && exoPlayer != null && isPlaying) {
+                            isLongPress2x = true
+                        }
+                    },
                     onTap = {
                         if (isLocked) {
                             showUnlockPill = !showUnlockPill
@@ -1497,23 +1516,15 @@ private fun PlayerStage(
                             showUnlockPill = true
                             return@detectTapGestures
                         }
+                        val player = exoPlayer ?: return@detectTapGestures
+                        if (player.duration <= 0L) return@detectTapGestures
                         val isLeft = offset.x < size.width / 2f
-                        if (exoPlayer != null) {
-                            if (isLeft) {
-                                exoPlayer.seekBack()
-                                doubleTapFeedback = "-10s"
-                            } else {
-                                exoPlayer.seekForward()
-                                doubleTapFeedback = "+10s"
-                            }
+                        if (isLeft) {
+                            player.seekBack()
+                            doubleTapFeedback = "-10s"
                         } else {
-                            if (isLeft) {
-                                onSimulatedRewind10()
-                                doubleTapFeedback = "-10s"
-                            } else {
-                                onSimulatedForward10()
-                                doubleTapFeedback = "+10s"
-                            }
+                            player.seekForward()
+                            doubleTapFeedback = "+10s"
                         }
                     }
                 )
@@ -1615,30 +1626,68 @@ private fun PlayerStage(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.28f))
-            )
-        } else {
-            Image(
-                painter = painterResource(id = media.backdropRes),
-                contentDescription = media.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.28f))
+                    .background(Color.Black.copy(alpha = 0.55f))
             )
         }
 
-        if (isBuffering || (isLoadingStream && exoPlayer == null)) {
-            CircularProgressIndicator(
-                color = MuvioEmerald,
-                strokeWidth = 2.8.dp,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(38.dp)
+        val activeError = playbackError ?: if (!isLoadingStream) streamError else null
+        val showLoadingIndicator = activeError == null && (
+            isBuffering ||
+                isLoadingStream ||
+                (exoPlayer != null && !hasRenderedFirstFrame && streamUrl.isNotBlank())
             )
+
+        if (showLoadingIndicator) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.72f),
+                shape = RoundedCornerShape(22.dp),
+                border = BorderStroke(0.9.dp, MuvioEmerald.copy(alpha = 0.45f)),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = MuvioEmerald,
+                        strokeWidth = 2.4.dp,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = if (isLoadingStream || !hasRenderedFirstFrame) {
+                            "Loading $activeQualityLabel..."
+                        } else {
+                            "Buffering $activeQualityLabel..."
+                        },
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        // Modern 2x Long-Press Speed Boost HUD pill
+        AnimatedVisibility(
+            visible = !isInPipMode && isLongPress2x,
+            enter = fadeIn(tween(110)),
+            exit = fadeOut(tween(140)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp)
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.82f),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MuvioEmerald)
+            ) {
+                Text(
+                    text = "2x Speed  ▶▶",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MuvioEmerald,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                )
+            }
         }
 
         // Sleek floating Brightness / Volume Swipe HUD (top-center, matching modern cinema players)
@@ -1756,18 +1805,17 @@ private fun PlayerStage(
         }
 
         if (!isInPipMode) {
-            val activeError = playbackError ?: if (!isLoadingStream) streamError else null
             activeError?.let { errMsg ->
                 Surface(
-                    color = Color.Black.copy(alpha = 0.80f),
-                    shape = RoundedCornerShape(12.dp),
+                    color = Color.Black.copy(alpha = 0.86f),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, MuvioOutline),
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 24.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
@@ -1777,23 +1825,52 @@ private fun PlayerStage(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            color = MuvioEmerald,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.clickable {
-                                playbackError = null
-                                alternateFallbackTriedEpisode = null
-                                retryCounter++
-                                onRetryStream()
-                            }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Retry Stream",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = Color.Black,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                            )
+                            Surface(
+                                color = MuvioEmerald,
+                                shape = RoundedCornerShape(18.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable {
+                                        playbackError = null
+                                        hasRenderedFirstFrame = false
+                                        alternateFallbackTriedEpisode = null
+                                        triedStreamIndices.clear()
+                                        sameStreamRetryCount = 0
+                                        retryCounter++
+                                        onRetryStream()
+                                    }
+                                    .testTag("player_retry_stream")
+                            ) {
+                                Text(
+                                    text = "Retry Stream",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.Black,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                                )
+                            }
+                            if (streamCount > 1) {
+                                Surface(
+                                    color = MuvioSurfaceElevated,
+                                    shape = RoundedCornerShape(18.dp),
+                                    border = BorderStroke(1.dp, MuvioChampagne.copy(alpha = 0.7f)),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .clickable { onOpenQualitySheet() }
+                                        .testTag("player_switch_quality_error")
+                                ) {
+                                    Text(
+                                        text = "Switch Quality",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MuvioChampagneLight,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1963,9 +2040,7 @@ private fun PlayerStage(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = {
-                            if (exoPlayer != null) exoPlayer.seekBack() else onSimulatedRewind10()
-                        }
+                        onClick = { exoPlayer?.seekBack() }
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Replay10,
@@ -1993,9 +2068,7 @@ private fun PlayerStage(
                     }
 
                     IconButton(
-                        onClick = {
-                            if (exoPlayer != null) exoPlayer.seekForward() else onSimulatedForward10()
-                        }
+                        onClick = { exoPlayer?.seekForward() }
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Forward10,
@@ -2025,9 +2098,7 @@ private fun PlayerStage(
                     exoPlayer = exoPlayer,
                     isPlaying = isPlaying,
                     isFullscreen = isFullscreen,
-                    simulatedProgressFraction = simulatedProgressFraction,
                     onTogglePlay = onTogglePlay,
-                    onSimulatedSeekFraction = onSimulatedSeekFraction,
                     onCycleAspectRatio = {
                         resizeModeIndex = (resizeModeIndex + 1) % 3
                         resizePillLabel = when (resizeModeIndex) {
@@ -2053,15 +2124,14 @@ private fun PlayerBottomScrubBar(
     exoPlayer: ExoPlayer?,
     isPlaying: Boolean,
     isFullscreen: Boolean,
-    simulatedProgressFraction: Float,
     onTogglePlay: () -> Unit,
-    onSimulatedSeekFraction: (Float) -> Unit,
     onCycleAspectRatio: () -> Unit,
     onEnterPip: () -> Unit,
     onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var positionMs by remember(exoPlayer) { mutableStateOf(exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L) }
+    var bufferedMs by remember(exoPlayer) { mutableStateOf(exoPlayer?.bufferedPosition?.coerceAtLeast(0L) ?: 0L) }
     var durationMs by remember(exoPlayer) { mutableStateOf(exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L) }
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubFraction by remember { mutableFloatStateOf(0f) }
@@ -2072,20 +2142,27 @@ private fun PlayerBottomScrubBar(
         while (true) {
             if (!isScrubbing) {
                 positionMs = player.currentPosition.coerceAtLeast(0L)
+                bufferedMs = player.bufferedPosition.coerceAtLeast(0L)
                 val dur = player.duration
                 if (dur > 0L) durationMs = dur
             }
-            delay(500L)
+            delay(400L)
         }
     }
 
+    val canSeek = exoPlayer != null && durationMs > 0L
     val sliderValue = when {
-        isScrubbing -> scrubFraction
-        exoPlayer != null && durationMs > 0L -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-        else -> simulatedProgressFraction
+        isScrubbing && canSeek -> scrubFraction
+        canSeek -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        else -> 0f
+    }
+    val bufferedFraction = if (canSeek) {
+        (bufferedMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
     }
 
-    val displayPosMs = if (isScrubbing && durationMs > 0L) {
+    val displayPosMs = if (isScrubbing && canSeek) {
         (scrubFraction * durationMs).toLong()
     } else {
         positionMs
@@ -2107,33 +2184,62 @@ private fun PlayerBottomScrubBar(
             )
         }
 
-        Slider(
-            value = sliderValue,
-            onValueChange = { fraction ->
-                if (exoPlayer != null && durationMs > 0L) {
-                    isScrubbing = true
-                    scrubFraction = fraction
-                } else {
-                    onSimulatedSeekFraction(fraction)
-                }
-            },
-            onValueChangeFinished = {
-                if (exoPlayer != null && durationMs > 0L && isScrubbing) {
-                    val seekMs = (scrubFraction * durationMs).toLong()
-                    positionMs = seekMs
-                    exoPlayer.seekTo(seekMs)
-                }
-                isScrubbing = false
-            },
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = MuvioEmerald,
-                inactiveTrackColor = Color.White.copy(alpha = 0.35f)
-            ),
+        // Dual-layer cinema seekbar: translucent buffered bar underneath live emerald playback track
+        Box(
             modifier = Modifier
                 .weight(1f)
-                .height(24.dp)
-        )
+                .height(26.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (canSeek && bufferedFraction > 0.01f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.20f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(bufferedFraction)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White.copy(alpha = 0.45f))
+                    )
+                }
+            }
+
+            Slider(
+                value = sliderValue,
+                enabled = canSeek,
+                onValueChange = { fraction ->
+                    if (canSeek) {
+                        isScrubbing = true
+                        scrubFraction = fraction
+                    }
+                },
+                onValueChangeFinished = {
+                    if (exoPlayer != null && canSeek && isScrubbing) {
+                        val seekMs = (scrubFraction * durationMs).toLong()
+                        positionMs = seekMs
+                        exoPlayer.seekTo(seekMs)
+                    }
+                    isScrubbing = false
+                },
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = MuvioEmerald,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.24f),
+                    disabledThumbColor = Color.White.copy(alpha = 0.45f),
+                    disabledActiveTrackColor = MuvioEmerald.copy(alpha = 0.45f),
+                    disabledInactiveTrackColor = Color.White.copy(alpha = 0.20f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+            )
+        }
 
         val timeText = if (exoPlayer != null && durationMs > 0L) {
             "${formatMillis(displayPosMs)}/${formatMillis(durationMs)}"

@@ -854,15 +854,7 @@ class SecondaryCatalogApiClient(
             ),
             backdropRes = R.drawable.img_hero_cinema,
             backdropUrl = backdropUrl,
-            resources = listOf(
-                StreamResource(
-                    id = "${namespacedId}_default",
-                    label = "$title [CinePulse HD]",
-                    language = langBadge ?: "Original",
-                    quality = "HD",
-                    uploader = "CinePulse HD"
-                )
-            ),
+            resources = emptyList(),
             contentSource = ContentSource.SECONDARY,
             sourceDetailPath = normalizeDetailPath(rawPath)
         )

@@ -118,9 +118,6 @@ class RangeContinuableHttpDataSource(
 
         transferInitializing(dataSpec)
 
-        val lowerUrl = dataSpec.uri.toString().lowercase()
-        val isPlaylistOrSub = lowerUrl.contains(".m3u8") || lowerUrl.contains(".vtt") ||
-            lowerUrl.contains(".srt") || lowerUrl.contains(".ass") || lowerUrl.contains("/api/hls/")
         val response = executeChunkRequestWithRetry(
             dataSpec = dataSpec,
             startOffset = dataSpec.position,
@@ -129,7 +126,7 @@ class RangeContinuableHttpDataSource(
             } else {
                 C.LENGTH_UNSET.toLong()
             },
-            forceRangeHeader = !isPlaylistOrSub || dataSpec.position > 0L || dataSpec.length != C.LENGTH_UNSET.toLong()
+            forceRangeHeader = dataSpec.position > 0L || dataSpec.length != C.LENGTH_UNSET.toLong()
         )
 
         val code = response.code

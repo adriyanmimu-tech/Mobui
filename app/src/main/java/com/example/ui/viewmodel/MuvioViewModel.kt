@@ -435,16 +435,19 @@ class MuvioViewModel(
         viewModelScope.launch {
             apiClient.fetchHomeFeed()
                 .onSuccess { feed ->
-                    if (feed.allItems.isNotEmpty()) {
+                    val validHomeItems = feed.allItems.onlyLivePlayable()
+                    if (validHomeItems.isNotEmpty()) {
                         _uiState.update { state ->
-                            val rawMerged = (feed.allItems + state.allMedia).distinctBy { it.id }
+                            val rawMerged = (validHomeItems + state.allMedia).distinctBy { it.id }
                             val mergedMedia = interleaveSources5050(rawMerged)
                             state.copy(
                                 isLoadingHome = false,
                                 isApiConnected = true,
-                                heroItems = buildTrendingHeroMix(feed.heroItems, mergedMedia, state.remoteConfig),
+                                heroItems = buildTrendingHeroMix(feed.heroItems.onlyLivePlayable(), mergedMedia, state.remoteConfig),
                                 allMedia = mergedMedia,
-                                liveSections = feed.sections,
+                                liveSections = feed.sections
+                                    .mapValues { (_, list) -> list.onlyLivePlayable() }
+                                    .filterValues { it.isNotEmpty() },
                                 apiStatusMessage = "Connected • ${mergedMedia.size} live titles synced"
                             )
                         }
@@ -498,8 +501,9 @@ class MuvioViewModel(
             listOf("/bengali" to "bengali", "/bollywood" to "bollywood").forEach { (path, regionTag) ->
                 launch {
                     apiClient.fetchCatalog(path, page = 1).onSuccess { regional ->
-                        if (regional.isNotEmpty()) {
-                            val tagged = regional.map { item ->
+                        val validRegional = regional.onlyLivePlayable()
+                        if (validRegional.isNotEmpty()) {
+                            val tagged = validRegional.map { item ->
                                 item.copy(
                                     country = item.country.ifBlank { if (regionTag == "bengali") "Bangladesh" else "India" },
                                     languageBadge = item.languageBadge ?: if (regionTag == "bengali") "Bengali" else "Hindi",
@@ -521,9 +525,10 @@ class MuvioViewModel(
         viewModelScope.launch {
             delay(1_100L)
             apiClient.fetchCatalog("/type/movies", page = 1).onSuccess { movies ->
-                if (movies.isNotEmpty()) {
+                val validMovies = movies.onlyLivePlayable()
+                if (validMovies.isNotEmpty()) {
                     _uiState.update { state ->
-                        val merged = interleaveSources5050((state.allMedia + movies).distinctBy { it.id })
+                        val merged = interleaveSources5050((state.allMedia + validMovies).distinctBy { it.id })
                         state.copy(
                             allMedia = merged,
                             heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
@@ -535,9 +540,10 @@ class MuvioViewModel(
         viewModelScope.launch {
             delay(1_150L)
             apiClient.fetchCatalog("/type/tv", page = 1).onSuccess { series ->
-                if (series.isNotEmpty()) {
+                val validSeries = series.onlyLivePlayable()
+                if (validSeries.isNotEmpty()) {
                     _uiState.update { state ->
-                        val merged = interleaveSources5050((state.allMedia + series).distinctBy { it.id })
+                        val merged = interleaveSources5050((state.allMedia + validSeries).distinctBy { it.id })
                         state.copy(
                             allMedia = merged,
                             heroItems = buildTrendingHeroMix(state.heroItems, merged, state.remoteConfig)
@@ -549,8 +555,9 @@ class MuvioViewModel(
         viewModelScope.launch {
             delay(1_200L)
             apiClient.fetchCatalog("/anime", page = 1).onSuccess { animeList ->
-                if (animeList.isNotEmpty()) {
-                    val taggedAnime = animeList.map { item ->
+                val validAnime = animeList.onlyLivePlayable()
+                if (validAnime.isNotEmpty()) {
+                    val taggedAnime = validAnime.map { item ->
                         item.copy(
                             mediaType = MediaType.ANIME,
                             sectionTags = (item.sectionTags + "anime").distinct()
@@ -603,20 +610,7 @@ class MuvioViewModel(
             }
         }
 
-        // 5. Coming Soon / Upcoming - GET /upcoming?page=1
-        viewModelScope.launch {
-            delay(1_400L)
-            apiClient.fetchUpcoming(page = 1).onSuccess { upcoming ->
-                if (upcoming.isNotEmpty()) {
-                    _uiState.update { state ->
-                        state.copy(
-                            upcomingMedia = upcoming,
-                            allMedia = (state.allMedia + upcoming).distinctBy { it.id }
-                        )
-                    }
-                }
-            }
-        }
+        // Unplayable Coming Soon / upcoming titles are intentionally excluded from Home catalog.
 
         // 6. All Categories (sports excluded, 18+ included) - GET /categories
         viewModelScope.launch {
@@ -829,9 +823,10 @@ class MuvioViewModel(
             _uiState.update { it.copy(secondarySourceError = null) }
             secondaryApiClient.fetchHome()
                 .onSuccess { secondaryHome ->
-                    if (secondaryHome.isNotEmpty()) {
+                    val validSecondaryHome = secondaryHome.onlyLivePlayable()
+                    if (validSecondaryHome.isNotEmpty()) {
                         _uiState.update { state ->
-                            val merged = interleaveSources5050((state.allMedia + secondaryHome).distinctBy { it.id })
+                            val merged = interleaveSources5050((state.allMedia + validSecondaryHome).distinctBy { it.id })
                             state.copy(
                                 isLoadingHome = false,
                                 isApiConnected = true,
@@ -844,9 +839,10 @@ class MuvioViewModel(
                     } else {
                         // Fallback to /catalog?path=/&page=1 if /home returned empty
                         secondaryApiClient.fetchCatalog(path = "/", page = 1).onSuccess { fallbackItems ->
-                            if (fallbackItems.isNotEmpty()) {
+                            val validFallback = fallbackItems.onlyLivePlayable()
+                            if (validFallback.isNotEmpty()) {
                                 _uiState.update { state ->
-                                    val merged = interleaveSources5050((state.allMedia + fallbackItems).distinctBy { it.id })
+                                    val merged = interleaveSources5050((state.allMedia + validFallback).distinctBy { it.id })
                                     state.copy(
                                         isLoadingHome = false,
                                         isApiConnected = true,
@@ -884,12 +880,13 @@ class MuvioViewModel(
             viewModelScope.launch {
                 delay(900L + idx * 140L)
                 secondaryApiClient.fetchCatalog(path = catPath, page = 1).onSuccess { catItems ->
-                    if (catItems.isNotEmpty()) {
+                    val validCatItems = catItems.onlyLivePlayable()
+                    if (validCatItems.isNotEmpty()) {
                         val isRegional = catPath in listOf("/language/bangla", "/bollywood", "/southIndian")
                         val enriched = if (isRegional) {
-                            catItems.map { it.copy(sectionTags = (it.sectionTags + "south_asia").distinct()) }
+                            validCatItems.map { it.copy(sectionTags = (it.sectionTags + "south_asia").distinct()) }
                         } else {
-                            catItems
+                            validCatItems
                         }
                         _uiState.update { state ->
                             val merged = interleaveSources5050((state.allMedia + enriched).distinctBy { it.id })
@@ -920,23 +917,10 @@ class MuvioViewModel(
                 }
             }
         }
-        // Blend Source 2 /upcoming 50/50 into Coming Soon
-        viewModelScope.launch {
-            delay(1_500L)
-            secondaryApiClient.fetchUpcoming(page = 1).onSuccess { upcoming ->
-                if (upcoming.isNotEmpty()) {
-                    _uiState.update { state ->
-                        val blendedUpcoming = interleaveSources5050((state.upcomingMedia + upcoming).distinctBy { it.id })
-                        val mergedAll = interleaveSources5050((state.allMedia + upcoming).distinctBy { it.id })
-                        state.copy(
-                            upcomingMedia = blendedUpcoming,
-                            allMedia = mergedAll
-                        )
-                    }
-                }
-            }
-        }
     }
+
+    private fun List<MediaItem>.onlyLivePlayable(): List<MediaItem> =
+        filter { !it.poster.remoteUrl.isNullOrBlank() && it.title.isNotBlank() }
 
     internal fun interleaveSources5050(items: List<MediaItem>): List<MediaItem> {
         val primary = items.filter { it.contentSource == ContentSource.PRIMARY }

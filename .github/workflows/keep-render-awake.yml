@@ -1,0 +1,32 @@
+name: Keep Render Servers Awake
+
+on:
+  schedule:
+    # Ping every 10 minutes so Render free instances stay warm (Render sleeps after 15m idle)
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-render:
+    name: Wake Source 1 & Source 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Ping Render API servers
+        run: |
+          ping_server() {
+            local name="$1"
+            local url="$2"
+            local result
+            result=$(curl -sS -L -o /dev/null -w "HTTP %{http_code} in %{time_total}s" --connect-timeout 20 --max-time 60 "$url" || echo "FAILED")
+            echo "[$name] $url -> $result"
+          }
+
+          ping_server "Source 1 (MovieBox)" "https://hd-w0l1.onrender.com/" &
+          PID1=$!
+          ping_server "Source 2 (MovieLink)" "https://movei-link.onrender.com/" &
+          PID2=$!
+
+          wait "$PID1" || true
+          wait "$PID2" || true

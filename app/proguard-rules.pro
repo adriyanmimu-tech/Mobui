@@ -1,14 +1,10 @@
-# Muvio Release R8 / ProGuard optimization rules (maximum safe APK size reduction)
+# Muvio Release R8 / ProGuard rules — full Media3 / ExoPlayer & OkHttp release protection
 
-# Repackage obfuscated classes into flat root package & allow aggressive R8 optimizations
--repackageclasses ''
--allowaccessmodification
-
-# Keep @Keep annotated Firestore DTOs & BuildConfig fields safe under R8 shrinking
+# Keep @Keep annotated models & BuildConfig fields safe under R8 shrinking
 -keep @androidx.annotation.Keep class * { *; }
 -keep class com.example.BuildConfig { *; }
 
-# Strip debug/info/warn Log calls in release builds for smaller & faster bytecode
+# Strip verbose/debug/info Log calls in release builds
 -assumenosideeffects class android.util.Log {
     public static boolean isLoggable(java.lang.String, int);
     public static int v(...);
@@ -23,10 +19,22 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+-dontwarn javax.annotation.**
 
-# Media3 / ExoPlayer reflection-instantiated HLS factory & PlayerView only (shrink unused internals)
--keep class androidx.media3.exoplayer.hls.HlsMediaSource$Factory {
-    public <init>(androidx.media3.datasource.DataSource$Factory);
-}
--keep class androidx.media3.ui.PlayerView { *; }
+# Media3 / ExoPlayer full reflection-safe keep rules (prevents Release APK black-screen / extractor stripping)
+-keep class androidx.media3.exoplayer.source.DefaultMediaSourceFactory { *; }
+-keep class androidx.media3.exoplayer.source.ProgressiveMediaSource$Factory { *; }
+-keep class androidx.media3.exoplayer.hls.HlsMediaSource$Factory { *; }
+-keep class androidx.media3.exoplayer.dash.DashMediaSource$Factory { *; }
+-keep class androidx.media3.datasource.okhttp.** { *; }
+-keep class androidx.media3.extractor.DefaultExtractorsFactory { *; }
+-keep class androidx.media3.extractor.mp4.** { *; }
+-keep class androidx.media3.extractor.mkv.** { *; }
+-keep class androidx.media3.extractor.ts.** { *; }
+-keep class androidx.media3.extractor.flv.** { *; }
+-keep class androidx.media3.extractor.ogg.** { *; }
+-keep class androidx.media3.extractor.text.** { *; }
+-keep class androidx.media3.exoplayer.video.** { *; }
+-keep class androidx.media3.exoplayer.audio.** { *; }
+-keep class androidx.media3.ui.** { *; }
 -dontwarn androidx.media3.**

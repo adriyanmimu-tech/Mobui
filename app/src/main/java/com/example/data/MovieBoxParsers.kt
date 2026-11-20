@@ -323,15 +323,7 @@ internal object MovieBoxParsers {
             ),
             backdropRes = R.drawable.img_hero_cinema,
             backdropUrl = backdropUrl,
-            resources = listOf(
-                StreamResource(
-                    id = "${rawId}_default",
-                    label = "$title [HD Stream]",
-                    language = langBadge ?: "Original",
-                    quality = "HD 1080p",
-                    uploader = "Muvio Direct"
-                )
-            ),
+            resources = emptyList(),
             releaseDateText = releaseDateText,
             bookedCount = bookedCount
         )

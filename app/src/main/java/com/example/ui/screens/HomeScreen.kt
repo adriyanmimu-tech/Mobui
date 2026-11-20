@@ -627,43 +627,7 @@ fun HomeScreen(
                 }
             }
 
-            // 8. Coming Soon / Upcoming Releases
-            if (uiState.upcomingMedia.isNotEmpty() && activeTopTab != "18+") {
-                item(key = "home_upcoming", contentType = "shelf") {
-                    SectionHeader(
-                        title = "Coming Soon",
-                        eyebrow = "PREMIERES",
-                        onSeeAllClick = onUpcomingSeeAllClick
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        itemsIndexed(uiState.upcomingMedia.take(12), key = { idx, item -> "up_${item.id}_$idx" }, contentType = { _, _ -> "poster" }) { _, item ->
-                            Column(modifier = Modifier.width(126.dp)) {
-                                MediaPosterCard(
-                                    item = item,
-                                    onClick = { onMediaClick(item) },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                if (item.releaseDateText.isNotBlank()) {
-                                    Text(
-                                        text = item.releaseDateText.take(10),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MuvioChampagne,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 3.dp, start = 2.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 9. Live API Categories (includes 18+, excludes sports/cricket/football/originals)
+            // 8. Live API Categories (includes 18+, excludes sports/cricket/football/originals)
             if (uiState.apiCategories.isNotEmpty()) {
                 item {
                     SectionHeader(

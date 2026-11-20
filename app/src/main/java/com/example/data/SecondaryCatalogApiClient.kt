@@ -100,6 +100,30 @@ class SecondaryCatalogApiClient(
         .addInterceptor(authInterceptor)
         .build()
 
+    private data class CachedEntry<T>(val value: T, val savedAtMs: Long)
+
+    private val detailCache = java.util.concurrent.ConcurrentHashMap<String, CachedEntry<SecondaryDetailResult>>()
+    private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CachedEntry<List<StreamResource>>>()
+    private val cacheTtlMs = 8 * 60_000L
+
+    private fun <T> readCache(map: java.util.concurrent.ConcurrentHashMap<String, CachedEntry<T>>, key: String): T? {
+        val entry = map[key] ?: return null
+        return if (System.currentTimeMillis() - entry.savedAtMs <= cacheTtlMs) {
+            entry.value
+        } else {
+            map.remove(key)
+            null
+        }
+    }
+
+    private fun <T> writeCache(map: java.util.concurrent.ConcurrentHashMap<String, CachedEntry<T>>, key: String, value: T) {
+        if (map.size >= 40) {
+            val oldestKey = map.entries.minByOrNull { it.value.savedAtMs }?.key
+            if (oldestKey != null) map.remove(oldestKey)
+        }
+        map[key] = CachedEntry(value, System.currentTimeMillis())
+    }
+
     fun isApiKeyConfigured(): Boolean {
         val key = effectiveApiKey()
         return key.isNotEmpty() &&
@@ -182,6 +206,11 @@ class SecondaryCatalogApiClient(
             runCatching {
                 requireApiKey()
                 val cleanPath = detailPath.ifBlank { fallbackItem.sourceDetailPath }.trim()
+                val cacheKey = cleanPath.ifBlank { fallbackItem.title.lowercase() }
+                readCache(detailCache, cacheKey)?.let { cached ->
+                    return@runCatching cached
+                }
+
                 val primaryParams = if (cleanPath.startsWith("/")) {
                     mapOf("path" to cleanPath)
                 } else {
@@ -197,12 +226,15 @@ class SecondaryCatalogApiClient(
                         detail.seasonEpisodes.values.any { it.isNotEmpty() } ||
                         detail.updatedItem.synopsis.isNotBlank()
                     if (hasRichData || !primaryParams.containsKey("path")) {
+                        writeCache(detailCache, cacheKey, detail)
                         return@runCatching detail
                     }
                 }
                 // Fallback to ?title=... if ?path=... returned incomplete/empty data
                 val titleRoot = executeGetJsonWithRetry(buildUrl("/details", mapOf("title" to fallbackItem.title)))
-                parseDetailsJson(titleRoot, fallbackItem)
+                val detail = parseDetailsJson(titleRoot, fallbackItem)
+                writeCache(detailCache, cacheKey, detail)
+                detail
             }
         }
 
@@ -218,6 +250,11 @@ class SecondaryCatalogApiClient(
         runCatching {
             requireApiKey()
             val cleanPath = detailPath.trim()
+            val cacheKey = "${cleanPath.ifBlank { title.lowercase() }}|s$season|e$episode|$isSeries"
+            readCache(streamCache, cacheKey)?.takeIf { it.isNotEmpty() }?.let { cached ->
+                return@runCatching cached
+            }
+
             val params = linkedMapOf<String, String>()
             if (cleanPath.startsWith("/")) {
                 params["path"] = cleanPath
@@ -237,6 +274,7 @@ class SecondaryCatalogApiClient(
             }.getOrDefault(emptyList())
 
             if (firstStreams.isNotEmpty()) {
+                writeCache(streamCache, cacheKey, firstStreams)
                 return@runCatching firstStreams
             }
 
@@ -254,6 +292,7 @@ class SecondaryCatalogApiClient(
                     parseStreamsJson(fallbackRoot, title = title, fallbackLanguage = fallbackLanguage)
                 }.getOrDefault(emptyList())
                 if (titleStreams.isNotEmpty()) {
+                    writeCache(streamCache, cacheKey, titleStreams)
                     return@runCatching titleStreams
                 }
             }
@@ -269,7 +308,11 @@ class SecondaryCatalogApiClient(
                     cleanParams["ep"] = "1"
                 }
                 val cleanRoot = executeGetJsonWithRetry(buildUrl("/stream", cleanParams))
-                return@runCatching parseStreamsJson(cleanRoot, title = title, fallbackLanguage = fallbackLanguage)
+                val resolved = parseStreamsJson(cleanRoot, title = title, fallbackLanguage = fallbackLanguage)
+                if (resolved.isNotEmpty()) {
+                    writeCache(streamCache, cacheKey, resolved)
+                }
+                return@runCatching resolved
             }
 
             emptyList()
@@ -930,7 +973,7 @@ class SecondaryCatalogApiClient(
         }
         return out
             .distinctBy { it.streamUrl }
-            .sortedByDescending { qualityRank(it.quality) }
+            .sortedByDescending { streamPlaybackScore(it) }
     }
 
     private fun isLikelyPlayableStreamUrl(url: String, strict: Boolean): Boolean {
@@ -1046,6 +1089,38 @@ class SecondaryCatalogApiClient(
             isMp4 -> "Direct MP4"
             isHls -> "Adaptive HLS"
             else -> if (index == 0) "HD" else "Server ${index + 1}"
+        }
+    }
+
+    /**
+     * Ranks Source 2 streams for fastest startup and minimal buffering:
+     * 1. Direct CDN URLs (bypassing Render proxy) ALWAYS outrank Render-proxied URLs.
+     * 2. On Render-proxied streams (movei-link.onrender.com), lightweight 720p / Direct MP4
+     *    rank ahead of heavy 1080p HLS proxy segments to avoid proxy bandwidth throttling
+     *    (1080p remains available in the Quality picker for fast Wi-Fi users).
+     */
+    private fun streamPlaybackScore(stream: StreamResource): Int {
+        val url = stream.streamUrl.lowercase()
+        val isProxiedOnRender = url.startsWith(originUrl.lowercase()) || url.contains(".onrender.com")
+        val isDirectMp4 = url.contains(".mp4") && !url.contains(".m3u8")
+        val q = stream.quality
+
+        return if (!isProxiedOnRender) {
+            // Direct CDN: fast & unthrottled — rank by quality with direct bonus
+            20_000 + qualityRank(q) + if (isDirectMp4) 150 else 0
+        } else {
+            // Proxied through Render free/shared node: prefer lighter 720p/MP4 for smooth zero-buffer playback
+            val proxyQualityScore = when {
+                q.contains("720") -> 1_300
+                isDirectMp4 && !q.contains("4K", true) && !q.contains("2160") -> 1_250
+                q.contains("480") -> 1_100
+                q.equals("HD", true) -> 1_050
+                q.contains("1080") -> 900
+                q.contains("360") -> 800
+                q.contains("4K", true) || q.contains("2160") -> 700
+                else -> 950
+            }
+            10_000 + proxyQualityScore
         }
     }
 

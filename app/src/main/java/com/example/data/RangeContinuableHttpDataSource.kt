@@ -305,7 +305,8 @@ class RangeContinuableHttpDataSource(
 
         val chunkSize = chunkEnd - currentChunkStart
         val readInChunk = currentPosition - currentChunkStart
-        if (chunkSize <= 0L || readInChunk * 100L < chunkSize * 55L) return
+        // Start warming up the next 206 chunk early (at 25%) so slow proxy TTFB never stalls playback
+        if (chunkSize <= 0L || readInChunk * 100L < chunkSize * 25L) return
 
         val endInclusive = computeEndInclusive()
         if (endInclusive != C.LENGTH_UNSET.toLong() && endInclusive < chunkEnd) return

@@ -1591,16 +1591,32 @@ class MuvioViewModel(
     private fun openSecondaryMediaDetail(media: MediaItem) {
         detailJob?.cancel()
         streamJob?.cancel()
+        val hasSavedEp = _uiState.value.selectedEpisodeByMedia.containsKey(media.id)
         val activeSeason = _uiState.value.selectedSeasonByMedia[media.id] ?: 1
         val activeEpNum = _uiState.value.selectedEpisodeByMedia[media.id] ?: 1
 
+        // Start fetching the stream IN PARALLEL with /details for movies & items with a detail path
+        // so ExoPlayer starts buffering right away instead of waiting for /details to finish first!
+        val canPreFetchStreamInParallel = secondaryApiClient.isConfigured() &&
+            (media.mediaType == MediaType.MOVIE || hasSavedEp)
+        if (canPreFetchStreamInParallel) {
+            fetchStreamsForMedia(media, activeSeason, activeEpNum)
+        }
+
         detailJob = viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingDetail = true, isLoadingStream = true) }
+            _uiState.update { it.copy(isLoadingDetail = true, isLoadingStream = it.streamsByMedia[media.id].isNullOrEmpty()) }
             secondaryApiClient.fetchDetails(media.sourceDetailPath, media)
                 .onSuccess { detail ->
                     val seasonEps = detail.seasonEpisodes[activeSeason]
                         ?: detail.seasonEpisodes.values.firstOrNull().orEmpty()
-                    val selectedEpSources = seasonEps.find { it.number == activeEpNum }?.sources
+                    // For long-running Bangla shows (e.g., Gopal Bhar starting at Ep 1221),
+                    // snap to the actual first episode number if ep 1 doesn't exist in the season list.
+                    val resolvedEpNum = if (seasonEps.isNotEmpty() && seasonEps.none { it.number == activeEpNum }) {
+                        seasonEps.first().number
+                    } else {
+                        activeEpNum
+                    }
+                    val selectedEpSources = seasonEps.find { it.number == resolvedEpNum }?.sources
                         ?.takeIf { it.isNotEmpty() }
                         ?: detail.initialStreams
 
@@ -1609,6 +1625,7 @@ class MuvioViewModel(
                         seasonEpisodes = detail.seasonEpisodes
                     )
 
+                    var alreadyHasStreams = false
                     _uiState.update { state ->
                         val nextAll = if (state.allMedia.any { it.id == media.id }) {
                             state.allMedia.map { if (it.id == media.id) updatedItem else it }
@@ -1621,22 +1638,32 @@ class MuvioViewModel(
                             .take(12)
                         val recs = existingRelated.ifEmpty { fallbackSecondaryRecs }
 
+                        val existingStreams = state.streamsByMedia[media.id].orEmpty()
+                        alreadyHasStreams = existingStreams.isNotEmpty() && resolvedEpNum == activeEpNum
+                        val finalStreams = if (alreadyHasStreams) existingStreams else selectedEpSources
+                        val preferredIdx = choosePreferredStreamIndex(finalStreams, state.preferredQuality)
+
                         state.copy(
                             isLoadingDetail = false,
-                            isLoadingStream = selectedEpSources.isEmpty(),
+                            isLoadingStream = finalStreams.isEmpty(),
                             allMedia = nextAll,
+                            selectedEpisodeByMedia = state.selectedEpisodeByMedia + (media.id to resolvedEpNum),
                             seasonsCountByMedia = state.seasonsCountByMedia + (media.id to detail.seasonsCount),
                             seasonEpisodesByMedia = if (detail.seasonEpisodes.isNotEmpty()) {
                                 state.seasonEpisodesByMedia + (media.id to detail.seasonEpisodes)
                             } else {
                                 state.seasonEpisodesByMedia
                             },
-                            streamsByMedia = if (selectedEpSources.isNotEmpty()) {
-                                state.streamsByMedia + (media.id to selectedEpSources)
+                            streamsByMedia = if (finalStreams.isNotEmpty()) {
+                                state.streamsByMedia + (media.id to finalStreams)
                             } else {
                                 state.streamsByMedia
                             },
-                            selectedStreamIndexByMedia = state.selectedStreamIndexByMedia + (media.id to 0),
+                            selectedStreamIndexByMedia = if (alreadyHasStreams) {
+                                state.selectedStreamIndexByMedia
+                            } else {
+                                state.selectedStreamIndexByMedia + (media.id to preferredIdx)
+                            },
                             detailRecommendationsByMedia = if (recs.isNotEmpty()) {
                                 state.detailRecommendationsByMedia + (media.id to recs)
                             } else {
@@ -1645,15 +1672,16 @@ class MuvioViewModel(
                         )
                     }
 
-                    // If /details didn't include direct streams for this episode/movie, fetch from Source 2 /stream endpoint
-                    if (selectedEpSources.isEmpty()) {
-                        fetchStreamsForMedia(updatedItem, activeSeason, activeEpNum)
+                    // If /details didn't include direct streams and parallel fetch didn't already load them, fetch /stream now
+                    if (selectedEpSources.isEmpty() && !alreadyHasStreams) {
+                        fetchStreamsForMedia(updatedItem, activeSeason, resolvedEpNum)
                     }
                 }
                 .onFailure {
                     _uiState.update { it.copy(isLoadingDetail = false) }
-                    // Still attempt direct Source 2 /stream fetch by title/path
-                    fetchStreamsForMedia(media, activeSeason, activeEpNum)
+                    if (_uiState.value.streamsByMedia[media.id].isNullOrEmpty()) {
+                        fetchStreamsForMedia(media, activeSeason, activeEpNum)
+                    }
                 }
         }
 
@@ -1803,14 +1831,20 @@ class MuvioViewModel(
                     return@launch
                 }
 
-                // If Source 2 returned 0 streams, try primary MovieBox /stream as a backup so playback still works
+                // If Source 2 returned 0 streams, try primary MovieBox ONLY when title strictly matches
                 val fallbackPrimary = if (apiClient.isApiKeyConfigured()) {
-                    apiClient.fetchStreams(
-                        title = media.title,
-                        season = season,
-                        episode = episode,
-                        isSeries = isSeries
-                    ).getOrNull().orEmpty()
+                    val matchedPrimary = apiClient.searchMedia(media.title).getOrNull().orEmpty()
+                        .firstOrNull { isStrictTitleMatch(media.title, it.title) }
+                    if (matchedPrimary != null) {
+                        apiClient.fetchStreams(
+                            title = matchedPrimary.title,
+                            season = season,
+                            episode = episode,
+                            isSeries = isSeries
+                        ).getOrNull().orEmpty()
+                    } else {
+                        emptyList()
+                    }
                 } else {
                     emptyList()
                 }
@@ -1869,14 +1903,20 @@ class MuvioViewModel(
             val resolvedStreams = if (primaryStreams.isNotEmpty()) {
                 primaryStreams
             } else if (secondaryApiClient.isConfigured()) {
-                secondaryApiClient.fetchStreams(
-                    detailPath = "",
-                    title = media.title,
-                    season = season,
-                    episode = episode,
-                    isSeries = isSeries,
-                    fallbackLanguage = media.languageBadge ?: "Original"
-                ).getOrNull().orEmpty()
+                val matchedSecondary = secondaryApiClient.searchMedia(media.title).getOrNull().orEmpty()
+                    .firstOrNull { isStrictTitleMatch(media.title, it.title) }
+                if (matchedSecondary != null) {
+                    secondaryApiClient.fetchStreams(
+                        detailPath = matchedSecondary.sourceDetailPath,
+                        title = matchedSecondary.title,
+                        season = season,
+                        episode = episode,
+                        isSeries = isSeries,
+                        fallbackLanguage = media.languageBadge ?: "Original"
+                    ).getOrNull().orEmpty()
+                } else {
+                    emptyList()
+                }
             } else {
                 emptyList()
             }
@@ -2022,16 +2062,27 @@ class MuvioViewModel(
 
     internal fun choosePreferredStreamIndex(streams: List<StreamResource>, preferredQuality: String): Int {
         if (streams.isEmpty()) return 0
+        // If any stream is a direct CDN URL (not proxied through Render), prefer those first
+        // for dramatically faster startup and zero proxy throttling.
+        val directIndices = streams.indices.filter { !streams[it].streamUrl.contains(".onrender.com", ignoreCase = true) }
+        val candidateIndices = if (directIndices.isNotEmpty()) directIndices else streams.indices.toList()
+        val allProxiedOnRender = directIndices.isEmpty()
+
         val desiredTokens = when {
             preferredQuality.contains("4K", ignoreCase = true) -> listOf("4K", "2160", "1080", "720")
             preferredQuality.contains("720", ignoreCase = true) -> listOf("720", "480", "1080")
+            // When every stream is proxied through Render, start on smooth 720p/MP4 instead of
+            // heavy 1080p HLS proxy segments (1080p stays available in the Quality picker).
+            allProxiedOnRender -> listOf("720", "MP4", "480", "HD", "1080")
             else -> listOf("1080", "720", "4K", "2160")
         }
         for (token in desiredTokens) {
-            val match = streams.indexOfFirst { it.quality.contains(token, ignoreCase = true) }
-            if (match >= 0) return match
+            val match = candidateIndices.firstOrNull { idx ->
+                streams[idx].quality.contains(token, ignoreCase = true)
+            }
+            if (match != null) return match
         }
-        return 0
+        return candidateIndices.first()
     }
 
     fun openShortReelFullDrama(reel: ShortReelItem): String {

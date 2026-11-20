@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
@@ -11,17 +13,23 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.extractor.text.SubtitleParser
 
 /**
  * Production-tuned Media3 ExoPlayer factory for ultra-smooth VOD (Source 1 & Source 2),
  * Shorts, and Live playback:
  * - Hardware-first decoders with automatic software decoder fallback for exotic codecs
- * - RangeContinuableHttpDataSource (OkHttp HTTP/2 pooled + lookahead chunk prefetching)
- * - Fast-start startup + deep anti-stutter forward/back buffering for variable mobile networks
+ * - RangeContinuableHttpDataSource (OkHttp HTTP/2 pooled + early 25% lookahead chunk prefetching)
+ * - Fast-start HLS chunkless preparation + 1.5 Mbps initial bitrate estimate for instant startup
+ * - Deep anti-stutter buffering (35s min / 90s max / 1s start / 5s rebuffer cushion) for proxied streams
  * - Resilient 4-retry load error handling + adaptive HLS bitrate switching
  * - Instant keyframe-snapped seeking (SeekParameters.CLOSEST_SYNC)
  */
@@ -40,6 +48,54 @@ object MuvioExoPlayerFactory {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
             .setEnableDecoderFallback(true)
 
+    private fun createSmartMediaSourceFactory(
+        dataSourceFactory: DataSource.Factory,
+        subtitleParserFactory: SubtitleParser.Factory? = null
+    ): MediaSource.Factory {
+        val defaultFactory = DefaultMediaSourceFactory(dataSourceFactory)
+            .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
+            .apply {
+                if (subtitleParserFactory != null) {
+                    setSubtitleParserFactory(subtitleParserFactory)
+                }
+            }
+        val fastHlsFactory = HlsMediaSource.Factory(dataSourceFactory)
+            .setAllowChunklessPreparation(true)
+            .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
+
+        return object : MediaSource.Factory {
+            override fun setDrmSessionManagerProvider(drmSessionManagerProvider: DrmSessionManagerProvider): MediaSource.Factory {
+                defaultFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
+                fastHlsFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
+                return this
+            }
+
+            override fun setLoadErrorHandlingPolicy(loadErrorHandlingPolicy: LoadErrorHandlingPolicy): MediaSource.Factory {
+                defaultFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                fastHlsFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                return this
+            }
+
+            override fun getSupportedTypes(): IntArray = defaultFactory.supportedTypes
+
+            override fun createMediaSource(mediaItem: MediaItem): MediaSource {
+                val localConfig = mediaItem.localConfiguration
+                val uriStr = localConfig?.uri?.toString().orEmpty()
+                val isHls = localConfig?.mimeType == MimeTypes.APPLICATION_M3U8 ||
+                    uriStr.contains(".m3u8", ignoreCase = true) ||
+                    uriStr.contains("/api/hls/", ignoreCase = true)
+                val hasExternalSubs = localConfig?.subtitleConfigurations?.isNotEmpty() == true
+                // Use DefaultMediaSourceFactory when external subtitles are attached so Media3 merges
+                // subtitle tracks automatically; otherwise use fast chunkless HlsMediaSource directly.
+                return if (isHls && !hasExternalSubs) {
+                    fastHlsFactory.createMediaSource(mediaItem)
+                } else {
+                    defaultFactory.createMediaSource(mediaItem)
+                }
+            }
+        }
+    }
+
     fun createVodPlayer(
         context: Context,
         headers: Map<String, String> = emptyMap(),
@@ -47,22 +103,25 @@ object MuvioExoPlayerFactory {
     ): ExoPlayer {
         val httpFactory = buildHttpDataSourceFactory(headers, connectMs = 18_000, readMs = 30_000)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-            .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
-            .apply {
-                if (subtitleParserFactory != null) {
-                    setSubtitleParserFactory(subtitleParserFactory)
-                }
-            }
+        val mediaSourceFactory = createSmartMediaSourceFactory(dataSourceFactory, subtitleParserFactory)
+
+        // Fast 1s initial start + deep 35s..90s forward buffer + 5s rebuffer cushion
+        // prevents repeated buffering loops on variable-speed proxy servers (Source 2).
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 25_000,
-                /* maxBufferMs = */ 60_000,
-                /* bufferForPlaybackMs = */ 1_200,
-                /* bufferForPlaybackAfterRebufferMs = */ 3_000
+                /* minBufferMs = */ 35_000,
+                /* maxBufferMs = */ 90_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 5_000
             )
-            .setBackBuffer(/* backBufferDurationMs = */ 20_000, /* retainBackBufferFromKeyframe = */ true)
+            .setBackBuffer(/* backBufferDurationMs = */ 25_000, /* retainBackBufferFromKeyframe = */ true)
             .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        // Start adaptive HLS estimation at 1.5 Mbps so playback begins immediately instead of
+        // stalling on a heavy initial 1080p segment, then scales up smoothly if bandwidth allows.
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setInitialBitrateEstimate(1_500_000L)
             .build()
 
         val trackSelector = DefaultTrackSelector(context).apply {
@@ -78,6 +137,7 @@ object MuvioExoPlayerFactory {
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
+            .setBandwidthMeter(bandwidthMeter)
             .setSeekBackIncrementMs(10_000L)
             .setSeekForwardIncrementMs(10_000L)
             .build()
@@ -94,8 +154,7 @@ object MuvioExoPlayerFactory {
         headers: Map<String, String> = emptyMap()
     ): ExoPlayer {
         val httpFactory = buildHttpDataSourceFactory(headers, connectMs = 15_000, readMs = 25_000)
-        val mediaSourceFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory))
-            .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
+        val mediaSourceFactory = createSmartMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory))
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 8_000,
@@ -104,6 +163,10 @@ object MuvioExoPlayerFactory {
                 /* bufferForPlaybackAfterRebufferMs = */ 1_500
             )
             .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setInitialBitrateEstimate(1_200_000L)
             .build()
 
         val trackSelector = DefaultTrackSelector(context).apply {
@@ -119,6 +182,7 @@ object MuvioExoPlayerFactory {
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
+            .setBandwidthMeter(bandwidthMeter)
             .build()
             .apply {
                 setAudioAttributes(mediaAudioAttributes, /* handleAudioFocus = */ true)
@@ -132,16 +196,19 @@ object MuvioExoPlayerFactory {
         headers: Map<String, String> = emptyMap()
     ): ExoPlayer {
         val httpFactory = buildHttpDataSourceFactory(headers, connectMs = 20_000, readMs = 30_000)
-        val mediaSourceFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory))
-            .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
+        val mediaSourceFactory = createSmartMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory))
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 10_000,
-                /* maxBufferMs = */ 30_000,
-                /* bufferForPlaybackMs = */ 1_200,
-                /* bufferForPlaybackAfterRebufferMs = */ 2_500
+                /* minBufferMs = */ 12_000,
+                /* maxBufferMs = */ 35_000,
+                /* bufferForPlaybackMs = */ 1_000,
+                /* bufferForPlaybackAfterRebufferMs = */ 3_000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setInitialBitrateEstimate(1_500_000L)
             .build()
 
         val trackSelector = DefaultTrackSelector(context).apply {
@@ -157,6 +224,7 @@ object MuvioExoPlayerFactory {
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
+            .setBandwidthMeter(bandwidthMeter)
             .build()
             .apply {
                 setAudioAttributes(mediaAudioAttributes, /* handleAudioFocus = */ true)

@@ -23,7 +23,7 @@ jobs:
             echo "[$name] $url -> $result"
           }
 
-          ping_server "Source 1 (MovieBox)" "https://hd-w0l1.onrender.com/" &
+          ping_server "Source 1 (MovieBox)" "https://hd-hcfs.onrender.com/" &
           PID1=$!
           ping_server "Source 2 (MovieLink)" "https://movei-link.onrender.com/" &
           PID2=$!

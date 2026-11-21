@@ -19,7 +19,7 @@ android {
     versionCode = 1
     versionName = "1.0"
 
-    buildConfigField("String", "MOVIEBOX_BASE_URL", "\"https://hd-w0l1.onrender.com/api/trial\"")
+    buildConfigField("String", "MOVIEBOX_BASE_URL", "\"https://hd-hcfs.onrender.com/api/trial\"")
     buildConfigField("String", "SECONDARY_CATALOG_BASE_URL", "\"https://movei-link.onrender.com/api/v1\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
